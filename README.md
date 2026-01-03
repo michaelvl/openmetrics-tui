@@ -2,6 +2,8 @@
 
 A terminal-based tool to monitor OpenMetrics/Prometheus metrics in real-time using a dynamic table layout. Built with Go and [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
+![Screenshot](docs/screenshot.png)
+
 ## Features
 
 - **Real-time Monitoring**: Polls metrics endpoints at configurable intervals.

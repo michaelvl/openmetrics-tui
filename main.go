@@ -233,14 +233,39 @@ func (m *model) updateTable() {
 			}
 		}
 		if m.cfg.FilterLabel != "" {
-			// Simple check: if any label matches
 			matched := false
-			for _, v := range series.Labels {
-				if ok, _ := regexp.MatchString(m.cfg.FilterLabel, v); ok {
-					matched = true
-					break
+			
+			// Check for key=value or key=~value
+			if idx := strings.Index(m.cfg.FilterLabel, "="); idx != -1 {
+				key := m.cfg.FilterLabel[:idx]
+				rest := m.cfg.FilterLabel[idx+1:]
+				
+				// Check if it is a regex match (starts with ~)
+				if strings.HasPrefix(rest, "~") {
+					pattern := rest[1:]
+					if val, ok := series.Labels[key]; ok {
+						if ok, _ := regexp.MatchString(pattern, val); ok {
+							matched = true
+						}
+					}
+				} else {
+					// Exact match
+					if val, ok := series.Labels[key]; ok {
+						if val == rest {
+							matched = true
+						}
+					}
+				}
+			} else {
+				// Fallback: match value against regex (original behavior)
+				for _, v := range series.Labels {
+					if ok, _ := regexp.MatchString(m.cfg.FilterLabel, v); ok {
+						matched = true
+						break
+					}
 				}
 			}
+			
 			if !matched {
 				continue
 			}

@@ -49,8 +49,16 @@ Basic usage requires providing the URL of the metrics endpoint:
 | `-history` | Number of historical samples to keep | `10` |
 | `-show-labels` | Show all labels in the table | `false` |
 | `-filter-metric` | Regex to filter metrics by name | - |
-| `-filter-label` | Regex to filter metrics by label | - |
+| `-filter-label` | Filter metrics by label (key=value, key=~regex, or regex) | - |
 | `-show-deltas` | Show deltas instead of absolute values | `false` |
+
+### Label Filtering
+
+The `-filter-label` flag supports three modes:
+
+1. **Exact Match**: `key=value` (e.g., `env=prod`) matches metrics where label `key` is exactly `value`.
+2. **Regex Match**: `key=~regex` (e.g., `env=~prod.*`) matches metrics where label `key` matches the regex `regex`.
+3. **Value Match (Legacy)**: `regex` (e.g., `prod`) matches metrics where *any* label value matches the regex.
 
 When `-show-deltas` is enabled:
 - The **Curr** (rightmost) column shows the **absolute value**.
@@ -73,6 +81,11 @@ When `-show-deltas` is enabled:
 **Filter for specific metrics (e.g., HTTP requests):**
 ```bash
 ./openmetrics-tui -url http://localhost:9090/metrics -filter-metric "http_requests_.*"
+```
+
+**Filter by label (exact match):**
+```bash
+./openmetrics-tui -url http://localhost:9090/metrics -filter-label "env=prod"
 ```
 
 **Show deltas with a faster polling interval:**

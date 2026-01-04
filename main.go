@@ -60,9 +60,12 @@ func main() {
 	fetcher := NewFetcher(cfg.URL)
 
 	// Initialize table
+	metricWidth := 30
+	if cfg.ShowLabels {
+		metricWidth = 60
+	}
 	columns := []table.Column{
-		{Title: "Metric", Width: 30},
-		{Title: "Labels", Width: 30},
+		{Title: "Metric", Width: metricWidth},
 		{Title: "Value", Width: 15},
 	}
 
@@ -168,55 +171,8 @@ func (m model) fetchCmd() tea.Cmd {
 }
 
 func (m *model) updateTable() {
-	// Calculate columns first
-	width := m.table.Width()
-	metricColWidth := 30
-	labelsColWidth := 30
-	valueColWidth := 10
-	
-	cols := []table.Column{
-		{Title: "Metric", Width: metricColWidth},
-	}
-	
-	if m.cfg.ShowLabels {
-		cols = append(cols, table.Column{Title: "Labels", Width: labelsColWidth})
-	}
-	
-	usedWidth := metricColWidth + 4
-	if m.cfg.ShowLabels {
-		usedWidth += labelsColWidth + 2
-	}
-	
-	availableForValues := width - usedWidth
-	// Handle edge case where width is not yet set
-	if width == 0 {
-		availableForValues = 100 // Default
-	}
-	
-	numValueCols := availableForValues / (valueColWidth + 2)
-	if numValueCols > m.cfg.History {
-		numValueCols = m.cfg.History
-	}
-	if numValueCols < 1 {
-		numValueCols = 1
-	}
-	
-	for i := 0; i < numValueCols; i++ {
-		title := fmt.Sprintf("-%ds", (numValueCols-1-i)*int(m.cfg.Interval.Seconds()))
-		if i == numValueCols-1 {
-			title = "Curr"
-		}
-		cols = append(cols, table.Column{Title: title, Width: valueColWidth})
-	}
-	// Clear rows to avoid panic if new columns > old rows
-	m.table.SetRows([]table.Row{})
-	m.table.SetColumns(cols)
-
-	rows := []table.Row{}
-	
-	// Filter and sort metrics
-	// For now, just dump everything
-	// We should sort keys to have stable order
+	// Filter metrics first
+	var filteredSeries []*MetricSeries
 	keys := make([]string, 0, len(m.store.Metrics))
 	for k := range m.store.Metrics {
 		keys = append(keys, k)
@@ -270,32 +226,94 @@ func (m *model) updateTable() {
 				continue
 			}
 		}
-		
-		row := []string{series.Name}
-		
-		if m.cfg.ShowLabels {
+		filteredSeries = append(filteredSeries, series)
+	}
+
+	// Calculate max widths based on filtered data
+	maxValueWidth := 5
+	metricColWidth := 30
+
+	for _, series := range filteredSeries {
+		// Calculate metric name width
+		name := series.Name
+		if m.cfg.ShowLabels && len(series.Labels) > 0 {
+			var labelParts []string
+			for k, v := range series.Labels {
+				labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
+			}
+			sort.Strings(labelParts)
+			name = fmt.Sprintf("%s{%s}", series.Name, strings.Join(labelParts, ","))
+		}
+		if len(name) > metricColWidth {
+			metricColWidth = len(name)
+		}
+
+		vals := series.ValuesWithDeltas(m.cfg.ShowDeltas)
+		for i, val := range vals {
+			if math.IsNaN(val) {
+				continue
+			}
+			formatted := fmt.Sprintf("%.2f", val)
+			if m.cfg.ShowDeltas && i < len(vals)-1 {
+				formatted = "Δ" + formatted
+			}
+			if len(formatted) > maxValueWidth {
+				maxValueWidth = len(formatted)
+			}
+		}
+	}
+
+	// Calculate columns
+	width := m.table.Width()
+	
+	cols := []table.Column{
+		{Title: "Metric", Width: metricColWidth},
+	}
+	
+	usedWidth := metricColWidth + 4
+	availableForValues := width - usedWidth
+	// Handle edge case where width is not yet set
+	if width == 0 {
+		availableForValues = 100 // Default
+	}
+	
+	numValueCols := availableForValues / (maxValueWidth + 2)
+	if numValueCols > m.cfg.History {
+		numValueCols = m.cfg.History
+	}
+	if numValueCols < 1 {
+		numValueCols = 1
+	}
+	
+	for i := 0; i < numValueCols; i++ {
+		title := fmt.Sprintf("-%ds", (numValueCols-1-i)*int(m.cfg.Interval.Seconds()))
+		if i == numValueCols-1 {
+			title = "Curr"
+		}
+		cols = append(cols, table.Column{Title: title, Width: maxValueWidth})
+	}
+	// Clear rows to avoid panic if new columns > old rows
+	m.table.SetRows([]table.Row{})
+	m.table.SetColumns(cols)
+
+	rows := []table.Row{}
+	
+	for _, series := range filteredSeries {
+		name := series.Name
+		if m.cfg.ShowLabels && len(series.Labels) > 0 {
 			// Format labels nicely
 			var labelParts []string
 			for k, v := range series.Labels {
 				labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
 			}
 			sort.Strings(labelParts)
-			row = append(row, strings.Join(labelParts, ","))
+			name = fmt.Sprintf("%s{%s}", series.Name, strings.Join(labelParts, ","))
 		}
+		
+		row := []string{name}
 
 		// Get values
 		vals := series.ValuesWithDeltas(m.cfg.ShowDeltas)
-		
-		// We need the last numValueCols values
-		startIdx := len(vals) - numValueCols
-		if startIdx < 0 {
-			startIdx = 0
-		}
-		
-		// Pad with empty if we don't have enough history yet?
-		// Or just show what we have aligned to the right?
-		// If we have 3 cols [T-2, T-1, T-0] and only 1 value, it should go in T-0.
-		// So we need to pad the left.
 		
 		// Create a slice of strings for the value columns
 		valStrs := make([]string, numValueCols)

@@ -255,7 +255,11 @@ func (m *model) updateTable() {
 			}
 			formatted := formatFloat(val)
 			if m.cfg.ShowDeltas && i < len(vals)-1 {
-				formatted = "Δ" + formatted
+				if formatted == "0" || formatted == "-0" {
+					formatted = "."
+				} else {
+					formatted = "Δ" + formatted
+				}
 			}
 			if len(formatted) > maxValueWidth {
 				maxValueWidth = len(formatted)
@@ -334,7 +338,11 @@ func (m *model) updateTable() {
 				} else {
 					formatted := formatFloat(val)
 					if m.cfg.ShowDeltas && valIdx < len(vals)-1 {
-						formatted = "Δ" + formatted
+						if formatted == "0" || formatted == "-0" {
+							formatted = "."
+						} else {
+							formatted = "Δ" + formatted
+						}
 					}
 					valStrs[i] = formatted
 				}

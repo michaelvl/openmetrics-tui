@@ -253,7 +253,7 @@ func (m *model) updateTable() {
 			if math.IsNaN(val) {
 				continue
 			}
-			formatted := fmt.Sprintf("%.2f", val)
+			formatted := formatFloat(val)
 			if m.cfg.ShowDeltas && i < len(vals)-1 {
 				formatted = "Δ" + formatted
 			}
@@ -332,7 +332,7 @@ func (m *model) updateTable() {
 				if math.IsNaN(val) {
 					valStrs[i] = "."
 				} else {
-					formatted := fmt.Sprintf("%.2f", val)
+					formatted := formatFloat(val)
 					if m.cfg.ShowDeltas && valIdx < len(vals)-1 {
 						formatted = "Δ" + formatted
 					}
@@ -362,5 +362,12 @@ func parseFlags() Config {
 
 	flag.Parse()
 	return cfg
+}
+
+func formatFloat(val float64) string {
+	s := fmt.Sprintf("%.2f", val)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	return s
 }
 

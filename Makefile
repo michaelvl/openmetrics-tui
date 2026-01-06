@@ -1,7 +1,7 @@
 BINARY_NAME=openmetrics-tui
 MOCK_BINARY_NAME=mock-server
 
-.PHONY: all build test lint clean run mock-server
+.PHONY: all build test lint fmt clean run mock-server
 
 all: build mock-server
 
@@ -16,6 +16,9 @@ test:
 
 lint:
 	golangci-lint run
+
+fmt:
+	go fmt ./...
 
 clean:
 	go clean

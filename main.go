@@ -21,7 +21,7 @@ type Config struct {
 	URL          string
 	Interval     time.Duration
 	History      int
-	ShowLabels   bool
+	HideLabels   bool
 	FilterMetric string
 	FilterLabel  string
 	ShowDeltas   bool
@@ -61,7 +61,7 @@ func main() {
 
 	// Initialize table
 	metricWidth := 30
-	if cfg.ShowLabels {
+	if !cfg.HideLabels {
 		metricWidth = 60
 	}
 	columns := []table.Column{
@@ -114,6 +114,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "l":
+			m.cfg.HideLabels = !m.cfg.HideLabels
+			m.updateTable()
+			return m, nil
 		}
 	case tickMsg:
 		return m, tea.Batch(m.fetchCmd(), m.tickCmd())
@@ -138,15 +142,20 @@ func (m model) View() string {
 	if m.err != nil {
 		return fmt.Sprintf("Error: %v\n\nPress q to quit.", m.err)
 	}
-	
+
 	// Add a footer with help
-	help := "q/ctrl+c: quit | arrows: navigate"
+	help := "q/ctrl+c: quit | arrows: navigate | l: toggle labels"
 	if m.cfg.ShowDeltas {
 		help += " | deltas: on"
 	} else {
 		help += " | deltas: off"
 	}
-	
+	if m.cfg.HideLabels {
+		help += " | labels: off"
+	} else {
+		help += " | labels: on"
+	}
+
 	return baseStyle.Render(m.table.View()) + "\n" + help + "\n"
 }
 
@@ -190,12 +199,12 @@ func (m *model) updateTable() {
 		}
 		if m.cfg.FilterLabel != "" {
 			matched := false
-			
+
 			// Check for key=value or key=~value
 			if idx := strings.Index(m.cfg.FilterLabel, "="); idx != -1 {
 				key := m.cfg.FilterLabel[:idx]
 				rest := m.cfg.FilterLabel[idx+1:]
-				
+
 				// Check if it is a regex match (starts with ~)
 				if strings.HasPrefix(rest, "~") {
 					pattern := rest[1:]
@@ -221,7 +230,7 @@ func (m *model) updateTable() {
 					}
 				}
 			}
-			
+
 			if !matched {
 				continue
 			}
@@ -229,14 +238,15 @@ func (m *model) updateTable() {
 		filteredSeries = append(filteredSeries, series)
 	}
 
-	// Calculate max widths based on filtered data
+	// Calculate max widths based on filtered data and store formatted names
 	maxValueWidth := 5
 	metricColWidth := 30
+	formattedNames := make([]string, len(filteredSeries))
 
-	for _, series := range filteredSeries {
+	for idx, series := range filteredSeries {
 		// Calculate metric name width
 		name := series.Name
-		if m.cfg.ShowLabels && len(series.Labels) > 0 {
+		if !m.cfg.HideLabels && len(series.Labels) > 0 {
 			var labelParts []string
 			for k, v := range series.Labels {
 				labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
@@ -244,8 +254,9 @@ func (m *model) updateTable() {
 			sort.Strings(labelParts)
 			name = fmt.Sprintf("%s{%s}", series.Name, strings.Join(labelParts, ","))
 		}
-		if len(name) > metricColWidth {
-			metricColWidth = len(name)
+		formattedNames[idx] = name
+		if lipgloss.Width(name) > metricColWidth {
+			metricColWidth = lipgloss.Width(name)
 		}
 
 		vals := series.ValuesWithDeltas(m.cfg.ShowDeltas)
@@ -261,26 +272,26 @@ func (m *model) updateTable() {
 					formatted = "Δ" + formatted
 				}
 			}
-			if len(formatted) > maxValueWidth {
-				maxValueWidth = len(formatted)
+			if lipgloss.Width(formatted) > maxValueWidth {
+				maxValueWidth = lipgloss.Width(formatted)
 			}
 		}
 	}
 
 	// Calculate columns
 	width := m.table.Width()
-	
+
 	cols := []table.Column{
 		{Title: "Metric", Width: metricColWidth},
 	}
-	
+
 	usedWidth := metricColWidth + 4
 	availableForValues := width - usedWidth
 	// Handle edge case where width is not yet set
 	if width == 0 {
 		availableForValues = 100 // Default
 	}
-	
+
 	numValueCols := availableForValues / (maxValueWidth + 2)
 	if numValueCols > m.cfg.History {
 		numValueCols = m.cfg.History
@@ -288,7 +299,7 @@ func (m *model) updateTable() {
 	if numValueCols < 1 {
 		numValueCols = 1
 	}
-	
+
 	for i := 0; i < numValueCols; i++ {
 		title := fmt.Sprintf("-%ds", (numValueCols-1-i)*int(m.cfg.Interval.Seconds()))
 		if i == numValueCols-1 {
@@ -301,24 +312,13 @@ func (m *model) updateTable() {
 	m.table.SetColumns(cols)
 
 	rows := []table.Row{}
-	
-	for _, series := range filteredSeries {
-		name := series.Name
-		if m.cfg.ShowLabels && len(series.Labels) > 0 {
-			// Format labels nicely
-			var labelParts []string
-			for k, v := range series.Labels {
-				labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
-			}
-			sort.Strings(labelParts)
-			name = fmt.Sprintf("%s{%s}", series.Name, strings.Join(labelParts, ","))
-		}
-		
-		row := []string{name}
+
+	for idx, series := range filteredSeries {
+		row := []string{formattedNames[idx]}
 
 		// Get values
 		vals := series.ValuesWithDeltas(m.cfg.ShowDeltas)
-		
+
 		// Create a slice of strings for the value columns
 		valStrs := make([]string, numValueCols)
 		for i := 0; i < numValueCols; i++ {
@@ -327,10 +327,10 @@ func (m *model) updateTable() {
 			// We want to display the last numValueCols values.
 			// The value at index `len(vals) - 1` should go to column `numValueCols - 1`.
 			// The value at index `len(vals) - 1 - offset` should go to column `numValueCols - 1 - offset`.
-			
+
 			offset := numValueCols - 1 - i
 			valIdx := len(vals) - 1 - offset
-			
+
 			if valIdx >= 0 && valIdx < len(vals) {
 				val := vals[valIdx]
 				if math.IsNaN(val) {
@@ -350,11 +350,11 @@ func (m *model) updateTable() {
 				valStrs[i] = ""
 			}
 		}
-		
+
 		row = append(row, valStrs...)
 		rows = append(rows, table.Row(row))
 	}
-	
+
 	m.table.SetRows(rows)
 }
 
@@ -363,7 +363,7 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.URL, "url", "", "URL to poll metrics from (required)")
 	flag.DurationVar(&cfg.Interval, "interval", 5*time.Second, "Polling interval")
 	flag.IntVar(&cfg.History, "history", 10, "Number of historical samples to keep")
-	flag.BoolVar(&cfg.ShowLabels, "show-labels", false, "Show all labels in the table")
+	flag.BoolVar(&cfg.HideLabels, "hide-labels", false, "Hide all labels in the table")
 	flag.StringVar(&cfg.FilterMetric, "filter-metric", "", "Regex to filter metrics by name")
 	flag.StringVar(&cfg.FilterLabel, "filter-label", "", "Regex to filter metrics by label (e.g. 'env=prod')")
 	flag.BoolVar(&cfg.ShowDeltas, "show-deltas", false, "Show deltas instead of absolute values")
@@ -378,4 +378,3 @@ func formatFloat(val float64) string {
 	s = strings.TrimRight(s, ".")
 	return s
 }
-

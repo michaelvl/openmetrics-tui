@@ -1,6 +1,6 @@
 # openmetrics-tui
 
-A terminal-based tool to monitor OpenMetrics/Prometheus metrics in real-time using a dynamic table layout. Built with Go and [Bubble Tea](https://github.com/charmbracelet/bubbletea).
+A terminal-based tool to monitor OpenMetrics/Prometheus metrics in real-time.
 
 ![Screenshot](docs/screenshot.png)
 
@@ -37,32 +37,37 @@ Requirements: Go 1.21+
 Basic usage requires providing the URL of the metrics endpoint:
 
 ```bash
-./openmetrics-tui -url http://localhost:9090/metrics
+./openmetrics-tui -url http://localhost:8080/metrics
 ```
 
 ### Command Line Flags
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `-url` | URL to poll metrics from (required) | - |
-| `-interval` | Polling interval | `5s` |
-| `-history` | Number of historical samples to keep | `10` |
-| `-show-labels` | Show all labels in the table | `false` |
-| `-filter-metric` | Regex to filter metrics by name | - |
-| `-filter-label` | Filter metrics by label (key=value, key=~regex, or regex) | - |
-| `-show-deltas` | Show deltas instead of absolute values | `false` |
+| Flag             | Description                                               | Default |
+| ---------------- | --------------------------------------------------------- | ------- |
+| `-url`           | URL to poll metrics from (required)                       | -       |
+| `-interval`      | Polling interval                                          | `5s`    |
+| `-history`       | Number of historical samples to keep                      | `10`    |
+| `-hide-labels`   | Hide all labels in the table                              | `false` |
+| `-filter-metric` | Regex to filter metrics by name                           | -       |
+| `-filter-label`  | Filter metrics by label (key=value, key=~regex, or regex) | -       |
+| `-show-deltas`   | Show deltas instead of absolute values                    | `false` |
 
 ### Label Filtering
 
 The `-filter-label` flag supports three modes:
 
-1. **Exact Match**: `key=value` (e.g., `env=prod`) matches metrics where label `key` is exactly `value`.
-2. **Regex Match**: `key=~regex` (e.g., `env=~prod.*`) matches metrics where label `key` matches the regex `regex`.
-3. **Value Match (Legacy)**: `regex` (e.g., `prod`) matches metrics where *any* label value matches the regex.
+1. **Exact Match**: `key=value` (e.g., `env=prod`) matches metrics where label
+   `key` is exactly `value`.
+2. **Regex Match**: `key=~regex` (e.g., `env=~prod.*`) matches metrics where
+   label `key` matches the regex `regex`.
+3. **Value Match (Legacy)**: `regex` (e.g., `prod`) matches metrics where _any_
+   label value matches the regex.
 
 When `-show-deltas` is enabled:
+
 - The **Curr** (rightmost) column shows the **absolute value**.
-- Historical columns (e.g., `T-1`) show the **delta** (change) leading to the next time step.
+- Historical columns (e.g., `T-1`) show the **delta** (change) leading to the
+  next time step.
   - `T-1` shows `Value(Curr) - Value(T-1)`
   - `T-2` shows `Value(T-1) - Value(T-2)`
 
@@ -70,32 +75,38 @@ When `-show-deltas` is enabled:
 
 - **q** / **ctrl+c**: Quit the application.
 - **↑** / **↓**: Navigate the table rows.
+- **l**: Toggle label visibility.
 
 ## Examples
 
 **Monitor a local Prometheus instance:**
+
 ```bash
-./openmetrics-tui -url http://localhost:9090/metrics
+./openmetrics-tui -url http://localhost:8080/metrics
 ```
 
 **Filter for specific metrics (e.g., HTTP requests):**
+
 ```bash
-./openmetrics-tui -url http://localhost:9090/metrics -filter-metric "http_requests_.*"
+./openmetrics-tui -url http://localhost:8080/metrics -filter-metric "http_requests_.*"
 ```
 
 **Filter by label (exact match):**
+
 ```bash
-./openmetrics-tui -url http://localhost:9090/metrics -filter-label "env=prod"
+./openmetrics-tui -url http://localhost:8080/metrics -filter-label "env=prod"
 ```
 
 **Show deltas with a faster polling interval:**
+
 ```bash
-./openmetrics-tui -url http://localhost:9090/metrics -interval 1s -show-deltas
+./openmetrics-tui -url http://localhost:8080/metrics -interval 1s -show-deltas
 ```
 
 ## Mock Server
 
-The project includes a mock server that serves sample metrics for testing purposes.
+The project includes a mock server that serves sample metrics for testing
+purposes.
 
 1. Build the mock server:
    ```bash

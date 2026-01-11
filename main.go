@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	dto "github.com/prometheus/client_model/go"
 )
 
@@ -28,11 +28,16 @@ type Config struct {
 }
 
 type model struct {
-	cfg     Config
-	store   *Store
-	fetcher *Fetcher
-	table   table.Model
-	err     error
+	cfg               Config
+	store             *Store
+	fetcher           *Fetcher
+	err               error
+	width             int
+	height            int
+	metricNameStyle   lipgloss.Style
+	labelStyle        lipgloss.Style
+	currentValueStyle lipgloss.Style
+	deltaValueStyle   lipgloss.Style
 }
 
 type tickMsg time.Time
@@ -59,39 +64,21 @@ func main() {
 	store := NewStore(cfg.History)
 	fetcher := NewFetcher(cfg.URL)
 
-	// Initialize table
-	metricWidth := 30
-	if !cfg.HideLabels {
-		metricWidth = 60
-	}
-	columns := []table.Column{
-		{Title: "Metric", Width: metricWidth},
-		{Title: "Value", Width: 15},
-	}
-
-	t := table.New(
-		table.WithColumns(columns),
-		table.WithFocused(true),
-		table.WithHeight(10),
-	)
-
-	s := table.DefaultStyles()
-	s.Header = s.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		BorderBottom(true).
-		Bold(false)
-	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
-	t.SetStyles(s)
+	metricNameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	labelStyle := lipgloss.NewStyle().Faint(true)
+	currentValueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")) // brighter magenta
+	deltaValueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("208"))   // orange
 
 	m := model{
-		cfg:     cfg,
-		store:   store,
-		fetcher: fetcher,
-		table:   t,
+		cfg:               cfg,
+		store:             store,
+		fetcher:           fetcher,
+		width:             80,
+		height:            24,
+		metricNameStyle:   metricNameStyle,
+		labelStyle:        labelStyle,
+		currentValueStyle: currentValueStyle,
+		deltaValueStyle:   deltaValueStyle,
 	}
 
 	if _, err := tea.NewProgram(m).Run(); err != nil {
@@ -108,7 +95,6 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -116,26 +102,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "l":
 			m.cfg.HideLabels = !m.cfg.HideLabels
-			m.updateTable()
+			return m, nil
+		case "d":
+			m.cfg.ShowDeltas = !m.cfg.ShowDeltas
 			return m, nil
 		}
 	case tickMsg:
 		return m, tea.Batch(m.fetchCmd(), m.tickCmd())
 	case map[string]*dto.MetricFamily: // Fetch result
 		m.store.UpdateFromFamilies(msg)
-		m.updateTable()
 		return m, nil
 	case error:
 		m.err = msg
 		return m, nil
 	case tea.WindowSizeMsg:
-		m.table.SetWidth(msg.Width)
-		m.table.SetHeight(msg.Height - 5) // Reserve space for header/footer
-		m.updateTable()
+		m.width = msg.Width
+		m.height = msg.Height
 	}
 
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 func (m model) View() string {
@@ -143,8 +128,11 @@ func (m model) View() string {
 		return fmt.Sprintf("Error: %v\n\nPress q to quit.", m.err)
 	}
 
+	// Build the table
+	tableStr := m.buildTable()
+
 	// Add a footer with help
-	help := "q/ctrl+c: quit | arrows: navigate | l: toggle labels"
+	help := "q/ctrl+c: quit | l: toggle labels | d: toggle deltas"
 	if m.cfg.ShowDeltas {
 		help += " | deltas: on"
 	} else {
@@ -156,7 +144,7 @@ func (m model) View() string {
 		help += " | labels: on"
 	}
 
-	return baseStyle.Render(m.table.View()) + "\n" + help + "\n"
+	return tableStr + "\n" + help + "\n"
 }
 
 var baseStyle = lipgloss.NewStyle().
@@ -179,7 +167,123 @@ func (m model) fetchCmd() tea.Cmd {
 	}
 }
 
-func (m *model) updateTable() {
+func formatMetricName(series *MetricSeries, hideLabels bool) string {
+	name := series.Name
+	if !hideLabels && len(series.Labels) > 0 {
+		var labelParts []string
+		for k, v := range series.Labels {
+			labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
+		}
+		sort.Strings(labelParts)
+		name += fmt.Sprintf("{%s}", strings.Join(labelParts, ","))
+	}
+	return name
+}
+
+func calculateColumnWidths(headers []string, rows [][]string) []int {
+	if len(rows) == 0 && len(headers) == 0 {
+		return []int{}
+	}
+
+	// Find the max number of columns (consider both headers and rows)
+	maxCols := len(headers)
+	for _, row := range rows {
+		if len(row) > maxCols {
+			maxCols = len(row)
+		}
+	}
+
+	// Calculate max width for each column (content only, no padding)
+	widths := make([]int, maxCols)
+	for colIdx := 0; colIdx < maxCols; colIdx++ {
+		maxWidth := 0
+
+		// Check header width
+		if colIdx < len(headers) {
+			headerWidth := lipgloss.Width(headers[colIdx])
+			if headerWidth > maxWidth {
+				maxWidth = headerWidth
+			}
+		}
+
+		// Check data cell widths
+		for _, row := range rows {
+			if colIdx < len(row) {
+				cellWidth := lipgloss.Width(row[colIdx])
+				if cellWidth > maxWidth {
+					maxWidth = cellWidth
+				}
+			}
+		}
+		widths[colIdx] = maxWidth
+	}
+
+	return widths
+}
+
+func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
+	rows := [][]string{}
+	for _, series := range filteredSeries {
+		// Style metric name and labels
+		styledName := m.metricNameStyle.Render(series.Name)
+		if !m.cfg.HideLabels && len(series.Labels) > 0 {
+			var labelParts []string
+			for k, v := range series.Labels {
+				labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
+			}
+			sort.Strings(labelParts)
+			styledName = styledName + m.labelStyle.Render(fmt.Sprintf("{%s}", strings.Join(labelParts, ",")))
+		}
+
+		row := []string{styledName}
+
+		// Get values - build all possible value columns up to history limit
+		vals := series.ValuesWithDeltas(m.cfg.ShowDeltas)
+		numValueCols := m.cfg.History
+		if numValueCols < 1 {
+			numValueCols = 1
+		}
+
+		// Create value columns
+		for i := 0; i < numValueCols; i++ {
+			offset := numValueCols - 1 - i
+			valIdx := len(vals) - 1 - offset
+			isCurrentValue := (i == numValueCols-1)
+
+			if valIdx >= 0 && valIdx < len(vals) {
+				val := vals[valIdx]
+				if math.IsNaN(val) {
+					row = append(row, ".")
+				} else {
+					formatted := formatFloat(val)
+					if m.cfg.ShowDeltas && !isCurrentValue {
+						// Delta values (not the current value)
+						if formatted == "0" || formatted == "-0" {
+							formatted = "."
+						} else {
+							// Add explicit sign for deltas
+							if val > 0 {
+								formatted = "+" + formatted
+							}
+							formatted = m.deltaValueStyle.Render(formatted)
+						}
+					} else if isCurrentValue {
+						// Current value is always shown in magenta
+						formatted = m.currentValueStyle.Render(formatted)
+					}
+					row = append(row, formatted)
+				}
+			} else {
+				row = append(row, "")
+			}
+		}
+
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func (m model) buildTable() string {
 	// Filter metrics first
 	var filteredSeries []*MetricSeries
 	keys := make([]string, 0, len(m.store.Metrics))
@@ -238,124 +342,109 @@ func (m *model) updateTable() {
 		filteredSeries = append(filteredSeries, series)
 	}
 
-	// Calculate max widths based on filtered data and store formatted names
-	maxValueWidth := 5
-	metricColWidth := 30
-	formattedNames := make([]string, len(filteredSeries))
+	if len(filteredSeries) == 0 {
+		return "No metrics to display"
+	}
 
-	for idx, series := range filteredSeries {
-		// Calculate metric name width
-		name := series.Name
-		if !m.cfg.HideLabels && len(series.Labels) > 0 {
-			var labelParts []string
-			for k, v := range series.Labels {
-				labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
-			}
-			sort.Strings(labelParts)
-			name = fmt.Sprintf("%s{%s}", series.Name, strings.Join(labelParts, ","))
+	// Build rows with all possible columns first
+	allRows := m.buildTableRows(filteredSeries)
+
+	// Build headers for all possible columns
+	maxPossibleValueCols := m.cfg.History
+	if maxPossibleValueCols < 1 {
+		maxPossibleValueCols = 1
+	}
+	allHeaders := []string{"Metric"}
+	for i := 0; i < maxPossibleValueCols; i++ {
+		title := fmt.Sprintf("-%ds", (maxPossibleValueCols-1-i)*int(m.cfg.Interval.Seconds()))
+		if i == maxPossibleValueCols-1 {
+			title = "Curr"
 		}
-		formattedNames[idx] = name
-		if lipgloss.Width(name) > metricColWidth {
-			metricColWidth = lipgloss.Width(name)
+		allHeaders = append(allHeaders, title)
+	}
+
+	// Calculate column widths from headers and data
+	colWidths := calculateColumnWidths(allHeaders, allRows)
+
+	// Calculate how many value columns will fit in terminal width
+	// Table width formula: sum(column_widths) + (num_columns + 1) for borders
+	usedWidth := 1 // Start with left border
+	if len(colWidths) > 0 {
+		usedWidth += colWidths[0] + 1 // metric name column + its right border
+	}
+
+	numValueCols := 0
+	maxPossibleCols := len(colWidths) - 1 // Subtract 1 for metric name column
+
+	// Add value columns from right to left (current going back in time)
+	// Column indices: [0] = metric name, [1..N] = value columns (oldest to newest)
+	for i := 0; i < maxPossibleCols; i++ {
+		colIdx := len(colWidths) - 1 - i // Start from rightmost (newest) column
+		if colIdx > 0 && colIdx < len(colWidths) {
+			// Each additional column adds: column_width + 1 border
+			if usedWidth+colWidths[colIdx]+1 <= m.width {
+				usedWidth += colWidths[colIdx] + 1
+				numValueCols++
+			} else {
+				break
+			}
 		}
-
-		vals := series.ValuesWithDeltas(m.cfg.ShowDeltas)
-		for i, val := range vals {
-			if math.IsNaN(val) {
-				continue
-			}
-			formatted := formatFloat(val)
-			if m.cfg.ShowDeltas && i < len(vals)-1 {
-				if formatted == "0" || formatted == "-0" {
-					formatted = "."
-				} else {
-					formatted = "Δ" + formatted
-				}
-			}
-			if lipgloss.Width(formatted) > maxValueWidth {
-				maxValueWidth = lipgloss.Width(formatted)
-			}
-		}
 	}
 
-	// Calculate columns
-	width := m.table.Width()
-
-	cols := []table.Column{
-		{Title: "Metric", Width: metricColWidth},
-	}
-
-	usedWidth := metricColWidth + 4
-	availableForValues := width - usedWidth
-	// Handle edge case where width is not yet set
-	if width == 0 {
-		availableForValues = 100 // Default
-	}
-
-	numValueCols := availableForValues / (maxValueWidth + 2)
-	if numValueCols > m.cfg.History {
-		numValueCols = m.cfg.History
-	}
 	if numValueCols < 1 {
 		numValueCols = 1
 	}
 
-	for i := 0; i < numValueCols; i++ {
-		title := fmt.Sprintf("-%ds", (numValueCols-1-i)*int(m.cfg.Interval.Seconds()))
-		if i == numValueCols-1 {
-			title = "Curr"
+	// Trim rows to fit the calculated number of columns
+	rows := make([][]string, len(allRows))
+	for i, row := range allRows {
+		// Keep metric name column + numValueCols from the end
+		trimmedRow := []string{row[0]}
+		startCol := len(row) - numValueCols
+		if startCol < 1 {
+			startCol = 1
 		}
-		cols = append(cols, table.Column{Title: title, Width: maxValueWidth})
+		trimmedRow = append(trimmedRow, row[startCol:]...)
+		rows[i] = trimmedRow
 	}
-	// Clear rows to avoid panic if new columns > old rows
-	m.table.SetRows([]table.Row{})
-	m.table.SetColumns(cols)
 
-	rows := []table.Row{}
+	// Trim headers to match the number of columns we're showing
+	headers := []string{allHeaders[0]} // Keep "Metric"
+	startHeaderCol := len(allHeaders) - numValueCols
+	if startHeaderCol < 1 {
+		startHeaderCol = 1
+	}
+	headers = append(headers, allHeaders[startHeaderCol:]...)
 
-	for idx, series := range filteredSeries {
-		row := []string{formattedNames[idx]}
+	// Pad rows to fill terminal height
+	// The table renders with: top border, header, border under header, data rows with borders between them, bottom border
+	// Plus help text (2 lines)
+	// Be conservative and subtract a bit more to ensure top border shows
+	tableOverhead := 5
+	dataRows := len(rows)
+	totalTableHeight := dataRows + tableOverhead
 
-		// Get values
-		vals := series.ValuesWithDeltas(m.cfg.ShowDeltas)
-
-		// Create a slice of strings for the value columns
-		valStrs := make([]string, numValueCols)
-		for i := 0; i < numValueCols; i++ {
-			// Map column index to value index
-			// Column 0 is oldest displayed. Column numValueCols-1 is newest.
-			// We want to display the last numValueCols values.
-			// The value at index `len(vals) - 1` should go to column `numValueCols - 1`.
-			// The value at index `len(vals) - 1 - offset` should go to column `numValueCols - 1 - offset`.
-
-			offset := numValueCols - 1 - i
-			valIdx := len(vals) - 1 - offset
-
-			if valIdx >= 0 && valIdx < len(vals) {
-				val := vals[valIdx]
-				if math.IsNaN(val) {
-					valStrs[i] = "."
-				} else {
-					formatted := formatFloat(val)
-					if m.cfg.ShowDeltas && valIdx < len(vals)-1 {
-						if formatted == "0" || formatted == "-0" {
-							formatted = "."
-						} else {
-							formatted = "Δ" + formatted
-						}
-					}
-					valStrs[i] = formatted
-				}
-			} else {
-				valStrs[i] = ""
+	if m.height > totalTableHeight {
+		emptyRowsNeeded := m.height - totalTableHeight - 1 // Extra safety margin
+		if emptyRowsNeeded > 0 {
+			emptyRow := make([]string, len(headers))
+			for i := range emptyRow {
+				emptyRow[i] = ""
+			}
+			for i := 0; i < emptyRowsNeeded; i++ {
+				rows = append(rows, emptyRow)
 			}
 		}
-
-		row = append(row, valStrs...)
-		rows = append(rows, table.Row(row))
 	}
 
-	m.table.SetRows(rows)
+	// Create table
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("240"))).
+		Headers(headers...).
+		Rows(rows...)
+
+	return t.Render()
 }
 
 func parseFlags() Config {

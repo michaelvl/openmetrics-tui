@@ -134,14 +134,15 @@ func (m model) View() string {
 	// Add a footer with help
 	help := "q/ctrl+c: quit | l: toggle labels | d: toggle deltas"
 	if m.cfg.ShowDeltas {
-		help += " | deltas: on"
+		deltaSymbol := m.deltaValueStyle.Render("Δ")
+		help += " | deltas: on " + deltaSymbol
 	} else {
 		help += " | deltas: off"
 	}
 	if m.cfg.HideLabels {
 		help += " | labels: off"
 	} else {
-		help += " | labels: on"
+		help += " | labels: on 🏷️"
 	}
 
 	return tableStr + "\n" + help + "\n"

@@ -35,6 +35,7 @@ type model struct {
 	connectionError     error
 	isConnected         bool
 	lastSuccessfulFetch time.Time
+	showHelp            bool
 	width               int
 	height              int
 	metricNameStyle     lipgloss.Style
@@ -103,6 +104,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "?":
+			m.showHelp = !m.showHelp
+			return m, nil
 		case "l":
 			m.cfg.HideLabels = !m.cfg.HideLabels
 			return m, nil
@@ -141,50 +145,75 @@ func (m model) View() string {
 	// Build the table
 	tableStr := m.buildTable()
 
-	// Build connection status indicator
+	// Build status indicator (URL with connection status)
 	var statusIndicator string
 	connectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("71")) // dimmer green
 	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))    // red
 
 	if m.isConnected {
-		statusIndicator = connectedStyle.Render("● Connected")
+		statusIndicator = connectedStyle.Render("● ") + m.cfg.URL
 	} else if m.connectionError != nil {
-		// Show brief error message
+		// Show error message instead of URL when there's a connection error
 		errMsg := m.connectionError.Error()
 		// Truncate long error messages
-		if len(errMsg) > 60 {
-			errMsg = errMsg[:57] + "..."
+		if len(errMsg) > 80 {
+			errMsg = errMsg[:77] + "..."
 		}
-		statusIndicator = errorStyle.Render("● Error: " + errMsg)
-
-		// Optionally show time since last successful fetch
-		if !m.lastSuccessfulFetch.IsZero() {
-			elapsed := time.Since(m.lastSuccessfulFetch)
-			statusIndicator += lipgloss.NewStyle().Faint(true).Render(
-				fmt.Sprintf(" (last update %ds ago)", int(elapsed.Seconds())),
-			)
-		}
+		statusIndicator = errorStyle.Render("⚠ " + errMsg)
 	} else {
-		// Initial state - no connection attempt yet
-		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● Connecting...")
+		// Initial state - connecting
+		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● ") + m.cfg.URL
 	}
 
-	// Add a footer with help
-	help := "q/ctrl+c: quit | l: toggle labels | d: toggle deltas"
+	// Build simplified footer
+	deltasStatus := "Off"
 	if m.cfg.ShowDeltas {
-		deltaSymbol := m.deltaValueStyle.Render("Δ")
-		help += " | deltas: on " + deltaSymbol
-	} else {
-		help += " | deltas: off"
+		deltasStatus = "On " + m.deltaValueStyle.Render("Δ")
 	}
-	if m.cfg.HideLabels {
-		help += " | labels: off"
-	} else {
-		help += " | labels: on 🏷️"
-	}
-	help += " | " + statusIndicator
 
-	return tableStr + "\n" + help + "\n"
+	footer := fmt.Sprintf("? for help | Deltas: %s | %s", deltasStatus, statusIndicator)
+
+	// Show help popup if toggled
+	output := tableStr + "\n" + footer + "\n"
+	if m.showHelp {
+		output = m.renderHelpOverlay(output)
+	}
+
+	return output
+}
+
+func (m model) renderHelpOverlay(content string) string {
+	helpText := `
+Help
+
+  q/ctrl+c    Quit
+  ?           Toggle this help
+  l           Toggle labels display
+  d           Toggle deltas/absolute values
+
+Press ? to close
+`
+
+	// Create a styled box for the help
+	helpStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("63")).
+		Padding(1, 2).
+		Background(lipgloss.Color("235")).
+		Foreground(lipgloss.Color("252"))
+
+	helpBox := helpStyle.Render(helpText)
+
+	// Overlay the help on top of content using Place
+	return lipgloss.Place(
+		m.width,
+		m.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		helpBox,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+	)
 }
 
 var baseStyle = lipgloss.NewStyle().

@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
@@ -9,15 +10,21 @@ import (
 )
 
 type Fetcher struct {
-	URL string
+	URL    string
+	client *http.Client
 }
 
 func NewFetcher(url string) *Fetcher {
-	return &Fetcher{URL: url}
+	return &Fetcher{
+		URL: url,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
 }
 
 func (f *Fetcher) Fetch() (map[string]*dto.MetricFamily, error) {
-	resp, err := http.Get(f.URL)
+	resp, err := f.client.Get(f.URL)
 	if err != nil {
 		return nil, err
 	}

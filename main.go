@@ -28,16 +28,19 @@ type Config struct {
 }
 
 type model struct {
-	cfg               Config
-	store             *Store
-	fetcher           *Fetcher
-	err               error
-	width             int
-	height            int
-	metricNameStyle   lipgloss.Style
-	labelStyle        lipgloss.Style
-	currentValueStyle lipgloss.Style
-	deltaValueStyle   lipgloss.Style
+	cfg                 Config
+	store               *Store
+	fetcher             *Fetcher
+	err                 error
+	connectionError     error
+	isConnected         bool
+	lastSuccessfulFetch time.Time
+	width               int
+	height              int
+	metricNameStyle     lipgloss.Style
+	labelStyle          lipgloss.Style
+	currentValueStyle   lipgloss.Style
+	deltaValueStyle     lipgloss.Style
 }
 
 type tickMsg time.Time
@@ -111,9 +114,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.fetchCmd(), m.tickCmd())
 	case map[string]*dto.MetricFamily: // Fetch result
 		m.store.UpdateFromFamilies(msg)
+		m.isConnected = true
+		m.connectionError = nil
+		m.lastSuccessfulFetch = time.Now()
 		return m, nil
 	case error:
-		m.err = msg
+		// Store connection error but keep retrying
+		m.connectionError = msg
+		m.isConnected = false
+		// Don't set m.err - that's for fatal errors only
+		// The tick/fetch cycle continues automatically
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -131,6 +141,34 @@ func (m model) View() string {
 	// Build the table
 	tableStr := m.buildTable()
 
+	// Build connection status indicator
+	var statusIndicator string
+	connectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("71")) // dimmer green
+	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))    // red
+
+	if m.isConnected {
+		statusIndicator = connectedStyle.Render("● Connected")
+	} else if m.connectionError != nil {
+		// Show brief error message
+		errMsg := m.connectionError.Error()
+		// Truncate long error messages
+		if len(errMsg) > 60 {
+			errMsg = errMsg[:57] + "..."
+		}
+		statusIndicator = errorStyle.Render("● Error: " + errMsg)
+
+		// Optionally show time since last successful fetch
+		if !m.lastSuccessfulFetch.IsZero() {
+			elapsed := time.Since(m.lastSuccessfulFetch)
+			statusIndicator += lipgloss.NewStyle().Faint(true).Render(
+				fmt.Sprintf(" (last update %ds ago)", int(elapsed.Seconds())),
+			)
+		}
+	} else {
+		// Initial state - no connection attempt yet
+		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● Connecting...")
+	}
+
 	// Add a footer with help
 	help := "q/ctrl+c: quit | l: toggle labels | d: toggle deltas"
 	if m.cfg.ShowDeltas {
@@ -144,6 +182,7 @@ func (m model) View() string {
 	} else {
 		help += " | labels: on 🏷️"
 	}
+	help += " | " + statusIndicator
 
 	return tableStr + "\n" + help + "\n"
 }

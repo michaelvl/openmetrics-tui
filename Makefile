@@ -1,7 +1,7 @@
 BINARY_NAME=openmetrics-tui
 MOCK_BINARY_NAME=mock-server
 
-.PHONY: all build test lint fmt clean run mock-server
+.PHONY: all build test lint fmt clean run mock-server screenshot
 
 all: build mock-server
 
@@ -26,3 +26,6 @@ clean:
 
 run: build
 	./$(BINARY_NAME)
+
+screenshot: build mock-server
+	vhs docs/screenshot.tape

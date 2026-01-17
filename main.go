@@ -146,29 +146,43 @@ func (m model) View() string {
 	tableStr := m.buildTable()
 
 	// Build status indicator (URL with connection status)
-	var statusIndicator string
 	connectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("71")) // dimmer green
 	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))    // red
 
-	if m.isConnected {
-		statusIndicator = connectedStyle.Render("● ") + m.cfg.URL
-	} else if m.connectionError != nil {
-		// Show error message instead of URL when there's a connection error
-		errMsg := m.connectionError.Error()
-		// Truncate long error messages
-		if len(errMsg) > 80 {
-			errMsg = errMsg[:77] + "..."
-		}
-		statusIndicator = errorStyle.Render("⚠ " + errMsg)
-	} else {
-		// Initial state - connecting
-		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● ") + m.cfg.URL
-	}
-
-	// Build simplified footer
+	// Build delta status first to measure it
 	deltasStatus := "Off"
 	if m.cfg.ShowDeltas {
 		deltasStatus = "On " + m.deltaValueStyle.Render("Δ")
+	}
+
+	// Calculate available space for error/URL message
+	fixedPrefix := "? for help | Deltas: "
+	fixedSeparator := " | "
+	fixedWidth := lipgloss.Width(fixedPrefix) +
+		lipgloss.Width(deltasStatus) +
+		lipgloss.Width(fixedSeparator) +
+		lipgloss.Width("● ") // Approximate icon width
+
+	safetyMargin := 3
+	maxMessageLength := m.width - fixedWidth - safetyMargin
+	if maxMessageLength < 20 {
+		maxMessageLength = 20
+	}
+
+	// Build status indicator with dynamic truncation
+	var statusIndicator string
+	if m.isConnected {
+		// Connected - show URL with truncation
+		url := truncateMessage(m.cfg.URL, maxMessageLength)
+		statusIndicator = connectedStyle.Render("● ") + url
+	} else if m.connectionError != nil {
+		// Error - show error message with truncation
+		errMsg := truncateMessage(m.connectionError.Error(), maxMessageLength)
+		statusIndicator = errorStyle.Render("⚠ " + errMsg)
+	} else {
+		// Initial connecting state - show URL with truncation
+		url := truncateMessage(m.cfg.URL, maxMessageLength)
+		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● ") + url
 	}
 
 	footer := fmt.Sprintf("? for help | Deltas: %s | %s", deltasStatus, statusIndicator)
@@ -180,6 +194,17 @@ func (m model) View() string {
 	}
 
 	return output
+}
+
+// truncateMessage truncates a message to maxLen, adding "..." if truncated
+func truncateMessage(msg string, maxLen int) string {
+	if maxLen < 4 {
+		maxLen = 4 // Minimum to fit "..."
+	}
+	if len(msg) <= maxLen {
+		return msg
+	}
+	return msg[:maxLen-3] + "..."
 }
 
 func (m model) renderHelpOverlay(content string) string {

@@ -15,12 +15,13 @@ type MetricSeries struct {
 	Values []float64
 }
 
-// ValuesWithDeltas returns the values, optionally converting them to deltas.
-// If deltas is true:
-// - The last value is the absolute value.
-// - Previous values are the delta to the next value (val[i+1] - val[i]).
-func (s *MetricSeries) ValuesWithDeltas(deltas bool) []float64 {
-	if !deltas {
+// ValuesWithDeltas returns the values, optionally converting them to deltas based on the mode.
+// Modes:
+// - "off": Returns raw absolute values
+// - "next": Historical values are deltas to next value (val[i+1] - val[i]), current is absolute
+// - "view": All values are deltas; historical same as "next", current is (last_historical - first_historical)
+func (s *MetricSeries) ValuesWithDeltas(mode string) []float64 {
+	if mode == "off" {
 		return s.Values
 	}
 
@@ -31,9 +32,7 @@ func (s *MetricSeries) ValuesWithDeltas(deltas bool) []float64 {
 	res := make([]float64, len(s.Values))
 	lastIdx := len(s.Values) - 1
 
-	// Last element is absolute
-	res[lastIdx] = s.Values[lastIdx]
-
+	// Handle historical values (all modes with deltas)
 	// Previous elements are deltas to the next element
 	for i := 0; i < lastIdx; i++ {
 		curr := s.Values[i]
@@ -44,6 +43,34 @@ func (s *MetricSeries) ValuesWithDeltas(deltas bool) []float64 {
 			res[i] = next - curr
 		}
 	}
+
+	// Handle the current/last value based on mode
+	if mode == "view" {
+		// In "view" mode, current shows diff between first and last historical
+		// Find first and last non-NaN historical values
+		firstHistIdx := -1
+		lastHistIdx := -1
+
+		for i := 0; i < lastIdx; i++ {
+			if !math.IsNaN(s.Values[i]) {
+				if firstHistIdx == -1 {
+					firstHistIdx = i
+				}
+				lastHistIdx = i
+			}
+		}
+
+		if firstHistIdx != -1 && lastHistIdx != -1 && firstHistIdx != lastHistIdx {
+			res[lastIdx] = s.Values[lastHistIdx] - s.Values[firstHistIdx]
+		} else {
+			// Not enough historical data for a view delta
+			res[lastIdx] = math.NaN()
+		}
+	} else {
+		// In "next" mode, last element is absolute
+		res[lastIdx] = s.Values[lastIdx]
+	}
+
 	return res
 }
 

@@ -16,6 +16,13 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
+// Delta mode constants
+const (
+	DeltaModeOff  = "off"
+	DeltaModeNext = "next"
+	DeltaModeView = "view"
+)
+
 // Config holds the command line arguments
 type Config struct {
 	URL          string
@@ -24,7 +31,7 @@ type Config struct {
 	HideLabels   bool
 	FilterMetric string
 	FilterLabel  string
-	ShowDeltas   bool
+	DeltaMode    string
 }
 
 type model struct {
@@ -111,7 +118,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cfg.HideLabels = !m.cfg.HideLabels
 			return m, nil
 		case "d":
-			m.cfg.ShowDeltas = !m.cfg.ShowDeltas
+			// Cycle through delta modes: off -> next -> view -> off
+			switch m.cfg.DeltaMode {
+			case DeltaModeOff:
+				m.cfg.DeltaMode = DeltaModeNext
+			case DeltaModeNext:
+				m.cfg.DeltaMode = DeltaModeView
+			case DeltaModeView:
+				m.cfg.DeltaMode = DeltaModeOff
+			default:
+				m.cfg.DeltaMode = DeltaModeOff
+			}
 			return m, nil
 		}
 	case tickMsg:
@@ -151,8 +168,11 @@ func (m model) View() string {
 
 	// Build delta status first to measure it
 	deltasStatus := "Off"
-	if m.cfg.ShowDeltas {
-		deltasStatus = "On " + m.deltaValueStyle.Render("Δ")
+	switch m.cfg.DeltaMode {
+	case DeltaModeNext:
+		deltasStatus = m.deltaValueStyle.Render("Δ") + " Next"
+	case DeltaModeView:
+		deltasStatus = m.deltaValueStyle.Render("Δ") + " View"
 	}
 
 	// Calculate available space for error/URL message
@@ -214,7 +234,7 @@ Help
   q/ctrl+c    Quit
   ?           Toggle this help
   l           Toggle labels display
-  d           Toggle deltas/absolute values
+  d           Cycle delta mode (off/next/view)
 
 Press ? to close
 `
@@ -332,7 +352,7 @@ func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
 		row := []string{styledName}
 
 		// Get values - build all possible value columns up to history limit
-		vals := series.ValuesWithDeltas(m.cfg.ShowDeltas)
+		vals := series.ValuesWithDeltas(m.cfg.DeltaMode)
 		numValueCols := m.cfg.History
 		if numValueCols < 1 {
 			numValueCols = 1
@@ -350,8 +370,20 @@ func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
 					row = append(row, ".")
 				} else {
 					formatted := formatFloat(val)
-					if m.cfg.ShowDeltas && !isCurrentValue {
-						// Delta values (not the current value)
+					isDeltaValue := false
+
+					// Determine if this should be displayed as a delta value
+					switch m.cfg.DeltaMode {
+					case DeltaModeNext:
+						// In 'next' mode, all historical values are deltas, current is absolute
+						isDeltaValue = !isCurrentValue
+					case DeltaModeView:
+						// In 'view' mode, all values including current are deltas
+						isDeltaValue = true
+					}
+
+					if isDeltaValue {
+						// Delta values
 						if formatted == "0" || formatted == "-0" {
 							formatted = "."
 						} else {
@@ -362,7 +394,7 @@ func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
 							formatted = m.deltaValueStyle.Render(formatted)
 						}
 					} else if isCurrentValue {
-						// Current value is always shown in magenta
+						// Current value in non-delta modes is shown in magenta
 						formatted = m.currentValueStyle.Render(formatted)
 					}
 					row = append(row, formatted)
@@ -549,9 +581,19 @@ func parseFlags() Config {
 	flag.BoolVar(&cfg.HideLabels, "hide-labels", false, "Hide all labels in the table")
 	flag.StringVar(&cfg.FilterMetric, "filter-metric", "", "Regex to filter metrics by name")
 	flag.StringVar(&cfg.FilterLabel, "filter-label", "", "Regex to filter metrics by label (e.g. 'env=prod')")
-	flag.BoolVar(&cfg.ShowDeltas, "show-deltas", false, "Show deltas instead of absolute values")
+	flag.StringVar(&cfg.DeltaMode, "delta-mode", DeltaModeOff, "Delta mode: off, next, view")
 
 	flag.Parse()
+
+	// Validate delta mode
+	switch cfg.DeltaMode {
+	case DeltaModeOff, DeltaModeNext, DeltaModeView:
+		// Valid mode
+	default:
+		fmt.Printf("Error: invalid delta mode '%s'. Must be one of: off, next, view\n", cfg.DeltaMode)
+		os.Exit(1)
+	}
+
 	return cfg
 }
 

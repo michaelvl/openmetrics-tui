@@ -40,7 +40,7 @@ Enter
 Show
 
 # Launch openmetrics-tui with a fast update interval for dynamic display
-Type "./openmetrics-tui -url http://localhost:8080/metrics -interval 1s --show-deltas"
+Type "./openmetrics-tui -url http://localhost:8080/metrics -interval 1s -delta-mode next"
 Enter
 
 # Wait for initial connection and data to load

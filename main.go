@@ -208,7 +208,7 @@ func (m model) View() string {
 	footer := fmt.Sprintf("? for help | Deltas: %s | %s", deltasStatus, statusIndicator)
 
 	// Show help popup if toggled
-	output := tableStr + "\n" + footer + "\n"
+	output := tableStr + "\n" + footer
 	if m.showHelp {
 		output = m.renderHelpOverlay(output)
 	}
@@ -546,7 +546,7 @@ func (m model) buildTable() string {
 	// The table renders with: top border, header, border under header, data rows with borders between them, bottom border
 	// Plus help text (2 lines)
 	// Be conservative and subtract a bit more to ensure top border shows
-	tableOverhead := 5
+	tableOverhead := 4
 	dataRows := len(rows)
 	totalTableHeight := dataRows + tableOverhead
 

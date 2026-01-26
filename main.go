@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
@@ -53,6 +54,8 @@ type model struct {
 	isPaused            bool
 	width               int
 	height              int
+	viewport            viewport.Model
+	viewportReady       bool
 	metricNameStyle     lipgloss.Style
 	labelStyle          lipgloss.Style
 	currentValueStyle   lipgloss.Style
@@ -114,6 +117,8 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -145,6 +150,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cfg.LabelMode = LabelModeShowAll
 				}
 			}
+			// Update viewport content when label mode changes
+			if m.viewportReady {
+				tableStr := m.buildTable()
+				m.viewport.SetContent(tableStr)
+			}
 			return m, nil
 		case "d":
 			// Cycle through delta modes: off -> next -> view -> off
@@ -158,10 +168,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				m.cfg.DeltaMode = DeltaModeOff
 			}
+			// Update viewport content when delta mode changes
+			if m.viewportReady {
+				tableStr := m.buildTable()
+				m.viewport.SetContent(tableStr)
+			}
 			return m, nil
 		case "p":
 			m.isPaused = !m.isPaused
 			return m, nil
+		default:
+			// Delegate other keys to viewport for scrolling
+			if m.viewportReady {
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
+			}
 		}
 	case tickMsg:
 		if m.isPaused {
@@ -179,6 +200,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isConnected = true
 		m.connectionError = nil
 		m.lastSuccessfulFetch = time.Now()
+		// Update viewport content with new data
+		if m.viewportReady {
+			tableStr := m.buildTable()
+			m.viewport.SetContent(tableStr)
+		}
 		return m, nil
 	case error:
 		// Store connection error but keep retrying
@@ -190,6 +216,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		// Initialize or resize viewport
+		// Reserve 2 lines: 1 for footer, 1 for safety margin
+		viewportHeight := msg.Height - 2
+		if viewportHeight < 1 {
+			viewportHeight = 1
+		}
+
+		if !m.viewportReady {
+			m.viewport = viewport.New(msg.Width, viewportHeight)
+			m.viewport.MouseWheelEnabled = true
+			m.viewportReady = true
+		} else {
+			m.viewport.Width = msg.Width
+			m.viewport.Height = viewportHeight
+		}
+
+		// Update viewport content with current table
+		if m.viewportReady {
+			tableStr := m.buildTable()
+			m.viewport.SetContent(tableStr)
+		}
 	}
 
 	return m, nil
@@ -200,12 +248,14 @@ func (m model) View() string {
 		return fmt.Sprintf("Error: %v\n\nPress q to quit.", m.err)
 	}
 
-	// Build the table
-	tableStr := m.buildTable()
+	if !m.viewportReady {
+		return "Initializing..."
+	}
 
 	// Build status indicator (URL with connection status)
 	connectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("71")) // dimmer green
 	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))    // red
+	scrollHintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Faint(true)
 
 	// Build delta status first to measure it
 	deltasStatus := "Off"
@@ -223,6 +273,16 @@ func (m model) View() string {
 		pauseStatus = " | " + pauseStyle.Render("⏸  PAUSED")
 	}
 
+	// Build scroll hints
+	var scrollHints string
+	if !m.viewport.AtTop() && !m.viewport.AtBottom() {
+		scrollHints = scrollHintStyle.Render(" ▲▼")
+	} else if !m.viewport.AtTop() {
+		scrollHints = scrollHintStyle.Render(" ▲")
+	} else if !m.viewport.AtBottom() {
+		scrollHints = scrollHintStyle.Render(" ▼")
+	}
+
 	// Calculate available space for error/URL message
 	fixedPrefix := "? for help | Deltas: "
 	fixedSeparator := " | "
@@ -230,6 +290,7 @@ func (m model) View() string {
 		lipgloss.Width(deltasStatus) +
 		lipgloss.Width(pauseStatus) +
 		lipgloss.Width(fixedSeparator) +
+		lipgloss.Width(scrollHints) +
 		lipgloss.Width("● ") // Approximate icon width
 
 	safetyMargin := 3
@@ -254,10 +315,10 @@ func (m model) View() string {
 		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● ") + url
 	}
 
-	footer := fmt.Sprintf("? for help | Deltas: %s%s | %s", deltasStatus, pauseStatus, statusIndicator)
+	footer := fmt.Sprintf("? for help | Deltas: %s%s | %s%s", deltasStatus, pauseStatus, statusIndicator, scrollHints)
 
 	// Show help popup if toggled
-	output := tableStr + "\n" + footer
+	output := m.viewport.View() + "\n" + footer
 	if m.showHelp {
 		output = m.renderHelpOverlay(output)
 	}
@@ -285,6 +346,9 @@ Help
   l           Cycle label display mode
   d           Cycle delta mode (off/next/view)
   p           Pause/unpause updates
+  ↑/↓         Scroll up/down
+  PgUp/PgDn   Page up/down
+  Home/End    Go to top/bottom
 
 Press ? to close
 `
@@ -631,27 +695,6 @@ func (m model) buildTable() string {
 		startHeaderCol = 1
 	}
 	headers = append(headers, allHeaders[startHeaderCol:]...)
-
-	// Pad rows to fill terminal height
-	// The table renders with: top border, header, border under header, data rows with borders between them, bottom border
-	// Plus help text (2 lines)
-	// Be conservative and subtract a bit more to ensure top border shows
-	tableOverhead := 4
-	dataRows := len(rows)
-	totalTableHeight := dataRows + tableOverhead
-
-	if m.height > totalTableHeight {
-		emptyRowsNeeded := m.height - totalTableHeight - 1 // Extra safety margin
-		if emptyRowsNeeded > 0 {
-			emptyRow := make([]string, len(headers))
-			for i := range emptyRow {
-				emptyRow[i] = ""
-			}
-			for i := 0; i < emptyRowsNeeded; i++ {
-				rows = append(rows, emptyRow)
-			}
-		}
-	}
 
 	// Create table
 	t := table.New().

@@ -50,6 +50,7 @@ type model struct {
 	isConnected         bool
 	lastSuccessfulFetch time.Time
 	showHelp            bool
+	isPaused            bool
 	width               int
 	height              int
 	metricNameStyle     lipgloss.Style
@@ -158,10 +159,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cfg.DeltaMode = DeltaModeOff
 			}
 			return m, nil
+		case "p":
+			m.isPaused = !m.isPaused
+			return m, nil
 		}
 	case tickMsg:
+		if m.isPaused {
+			// When paused, only schedule next tick (no fetch)
+			return m, m.tickCmd()
+		}
+		// When not paused, do both fetch and schedule next tick
 		return m, tea.Batch(m.fetchCmd(), m.tickCmd())
 	case map[string]*dto.MetricFamily: // Fetch result
+		if m.isPaused {
+			// Ignore fetch results while paused
+			return m, nil
+		}
 		m.store.UpdateFromFamilies(msg)
 		m.isConnected = true
 		m.connectionError = nil
@@ -203,11 +216,19 @@ func (m model) View() string {
 		deltasStatus = m.deltaValueStyle.Render("Δ") + " View"
 	}
 
+	// Build pause status
+	var pauseStatus string
+	if m.isPaused {
+		pauseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Bold(true)
+		pauseStatus = " | " + pauseStyle.Render("⏸  PAUSED")
+	}
+
 	// Calculate available space for error/URL message
 	fixedPrefix := "? for help | Deltas: "
 	fixedSeparator := " | "
 	fixedWidth := lipgloss.Width(fixedPrefix) +
 		lipgloss.Width(deltasStatus) +
+		lipgloss.Width(pauseStatus) +
 		lipgloss.Width(fixedSeparator) +
 		lipgloss.Width("● ") // Approximate icon width
 
@@ -233,7 +254,7 @@ func (m model) View() string {
 		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● ") + url
 	}
 
-	footer := fmt.Sprintf("? for help | Deltas: %s | %s", deltasStatus, statusIndicator)
+	footer := fmt.Sprintf("? for help | Deltas: %s%s | %s", deltasStatus, pauseStatus, statusIndicator)
 
 	// Show help popup if toggled
 	output := tableStr + "\n" + footer
@@ -263,6 +284,7 @@ Help
   ?           Toggle this help
   l           Cycle label display mode
   d           Cycle delta mode (off/next/view)
+  p           Pause/unpause updates
 
 Press ? to close
 `

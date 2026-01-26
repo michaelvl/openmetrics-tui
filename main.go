@@ -23,12 +23,19 @@ const (
 	DeltaModeView = "view"
 )
 
+// Label mode constants
+const (
+	LabelModeShowAll      = "all"
+	LabelModeHideFiltered = "hide-filtered"
+	LabelModeHideAll      = "hide-all"
+)
+
 // Config holds the command line arguments
 type Config struct {
 	URL          string
 	Interval     time.Duration
 	History      int
-	HideLabels   bool
+	LabelMode    string
 	FilterMetric string
 	FilterLabel  string
 	DeltaMode    string
@@ -115,7 +122,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = !m.showHelp
 			return m, nil
 		case "l":
-			m.cfg.HideLabels = !m.cfg.HideLabels
+			// Cycle through label modes
+			// If FilterLabel is empty, skip the "hide-filtered" mode
+			if m.cfg.FilterLabel == "" {
+				// Simple toggle: all <-> hide-all
+				if m.cfg.LabelMode == LabelModeShowAll {
+					m.cfg.LabelMode = LabelModeHideAll
+				} else {
+					m.cfg.LabelMode = LabelModeShowAll
+				}
+			} else {
+				// Full cycle: all -> hide-filtered -> hide-all -> all
+				switch m.cfg.LabelMode {
+				case LabelModeShowAll:
+					m.cfg.LabelMode = LabelModeHideFiltered
+				case LabelModeHideFiltered:
+					m.cfg.LabelMode = LabelModeHideAll
+				case LabelModeHideAll:
+					m.cfg.LabelMode = LabelModeShowAll
+				default:
+					m.cfg.LabelMode = LabelModeShowAll
+				}
+			}
 			return m, nil
 		case "d":
 			// Cycle through delta modes: off -> next -> view -> off
@@ -233,7 +261,7 @@ Help
 
   q/ctrl+c    Quit
   ?           Toggle this help
-  l           Toggle labels display
+  l           Cycle label display mode
   d           Cycle delta mode (off/next/view)
 
 Press ? to close
@@ -294,6 +322,23 @@ func formatMetricName(series *MetricSeries, hideLabels bool) string {
 	return name
 }
 
+// getFilteredLabelKeys extracts the label key(s) from a filter pattern
+// Returns the label keys that are being filtered on
+func getFilteredLabelKeys(filterLabel string) []string {
+	if filterLabel == "" {
+		return []string{}
+	}
+
+	// Check for key=value or key=~value pattern
+	if idx := strings.Index(filterLabel, "="); idx != -1 {
+		key := filterLabel[:idx]
+		return []string{key}
+	}
+
+	// Fallback regex pattern - can't determine specific keys
+	return []string{}
+}
+
 func calculateColumnWidths(headers []string, rows [][]string) []int {
 	if len(rows) == 0 && len(headers) == 0 {
 		return []int{}
@@ -338,15 +383,38 @@ func calculateColumnWidths(headers []string, rows [][]string) []int {
 func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
 	rows := [][]string{}
 	for _, series := range filteredSeries {
-		// Style metric name and labels
+		// Style metric name and labels based on label mode
 		styledName := m.metricNameStyle.Render(series.Name)
-		if !m.cfg.HideLabels && len(series.Labels) > 0 {
+
+		// Determine which labels to show based on mode
+		if m.cfg.LabelMode != LabelModeHideAll && len(series.Labels) > 0 {
 			var labelParts []string
-			for k, v := range series.Labels {
-				labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
+
+			if m.cfg.LabelMode == LabelModeHideFiltered {
+				// Hide only the filtered label keys
+				filteredKeys := getFilteredLabelKeys(m.cfg.FilterLabel)
+				filteredKeyMap := make(map[string]bool)
+				for _, key := range filteredKeys {
+					filteredKeyMap[key] = true
+				}
+
+				// Only include labels whose keys are NOT in the filter
+				for k, v := range series.Labels {
+					if !filteredKeyMap[k] {
+						labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
+					}
+				}
+			} else {
+				// LabelModeShowAll - show all labels
+				for k, v := range series.Labels {
+					labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
+				}
 			}
-			sort.Strings(labelParts)
-			styledName = styledName + m.labelStyle.Render(fmt.Sprintf("{%s}", strings.Join(labelParts, ",")))
+
+			if len(labelParts) > 0 {
+				sort.Strings(labelParts)
+				styledName = styledName + m.labelStyle.Render(fmt.Sprintf("{%s}", strings.Join(labelParts, ",")))
+			}
 		}
 
 		row := []string{styledName}
@@ -578,12 +646,21 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.URL, "url", "", "URL to poll metrics from (required)")
 	flag.DurationVar(&cfg.Interval, "interval", 5*time.Second, "Polling interval")
 	flag.IntVar(&cfg.History, "history", 10, "Number of historical samples to keep")
-	flag.BoolVar(&cfg.HideLabels, "hide-labels", false, "Hide all labels in the table")
+	flag.StringVar(&cfg.LabelMode, "label-mode", LabelModeShowAll, "Label display mode: all, hide-filtered, hide-all")
 	flag.StringVar(&cfg.FilterMetric, "filter-metric", "", "Regex to filter metrics by name")
 	flag.StringVar(&cfg.FilterLabel, "filter-label", "", "Regex to filter metrics by label (e.g. 'env=prod')")
 	flag.StringVar(&cfg.DeltaMode, "delta-mode", DeltaModeOff, "Delta mode: off, next, view")
 
 	flag.Parse()
+
+	// Validate label mode
+	switch cfg.LabelMode {
+	case LabelModeShowAll, LabelModeHideFiltered, LabelModeHideAll:
+		// Valid mode
+	default:
+		fmt.Printf("Error: invalid label mode '%s'. Must be one of: all, hide-filtered, hide-all\n", cfg.LabelMode)
+		os.Exit(1)
+	}
 
 	// Validate delta mode
 	switch cfg.DeltaMode {

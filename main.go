@@ -644,7 +644,23 @@ func (m model) buildTable() string {
 	}
 
 	if len(filteredSeries) == 0 {
-		return "No metrics to display"
+		if len(m.store.Metrics) == 0 {
+			return "No metrics to display"
+		}
+		var reasons []string
+		if m.cfg.FilterMetric != "" {
+			reasons = append(reasons, "metric filter")
+		}
+		if m.cfg.FilterLabel != "" {
+			reasons = append(reasons, "label filter")
+		}
+		if m.cfg.HideStatic {
+			reasons = append(reasons, "hide-static")
+		}
+		if len(reasons) == 0 {
+			return "No metrics to display"
+		}
+		return fmt.Sprintf("No metrics to display (all %d metrics hidden by: %s)", len(m.store.Metrics), strings.Join(reasons, ", "))
 	}
 
 	// Build rows with all possible columns first

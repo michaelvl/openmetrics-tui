@@ -40,6 +40,7 @@ type Config struct {
 	FilterMetric string
 	FilterLabel  string
 	DeltaMode    string
+	HideStatic   bool
 }
 
 type model struct {
@@ -177,6 +178,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "p":
 			m.isPaused = !m.isPaused
 			return m, nil
+		case "s":
+			m.cfg.HideStatic = !m.cfg.HideStatic
+			// Update viewport content when hide-static mode changes
+			if m.viewportReady {
+				tableStr := m.buildTable()
+				m.viewport.SetContent(tableStr)
+			}
+			return m, nil
 		default:
 			// Delegate other keys to viewport for scrolling
 			if m.viewportReady {
@@ -273,6 +282,13 @@ func (m model) View() string {
 		pauseStatus = " | " + pauseStyle.Render("⏸  PAUSED")
 	}
 
+	// Build hide-static status
+	var hideStaticStatus string
+	if m.cfg.HideStatic {
+		hideStaticStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+		hideStaticStatus = " | " + hideStaticStyle.Render("Static: Hidden")
+	}
+
 	// Build scroll hints
 	var scrollHints string
 	if !m.viewport.AtTop() && !m.viewport.AtBottom() {
@@ -289,6 +305,7 @@ func (m model) View() string {
 	fixedWidth := lipgloss.Width(fixedPrefix) +
 		lipgloss.Width(deltasStatus) +
 		lipgloss.Width(pauseStatus) +
+		lipgloss.Width(hideStaticStatus) +
 		lipgloss.Width(fixedSeparator) +
 		lipgloss.Width(scrollHints) +
 		lipgloss.Width("● ") // Approximate icon width
@@ -315,7 +332,7 @@ func (m model) View() string {
 		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● ") + url
 	}
 
-	footer := fmt.Sprintf("? for help | Deltas: %s%s | %s%s", deltasStatus, pauseStatus, statusIndicator, scrollHints)
+	footer := fmt.Sprintf("? for help | Deltas: %s%s%s | %s%s", deltasStatus, pauseStatus, hideStaticStatus, statusIndicator, scrollHints)
 
 	// Show help popup if toggled
 	output := m.viewport.View() + "\n" + footer
@@ -346,6 +363,7 @@ Help
   l           Cycle label display mode
   d           Cycle delta mode (off/next/view)
   p           Pause/unpause updates
+  s           Toggle hiding static (unchanging) metrics
   ↑/↓         Scroll up/down
   PgUp/PgDn   Page up/down
   Home/End    Go to top/bottom
@@ -619,6 +637,9 @@ func (m model) buildTable() string {
 				continue
 			}
 		}
+		if m.cfg.HideStatic && series.IsStatic() {
+			continue
+		}
 		filteredSeries = append(filteredSeries, series)
 	}
 
@@ -715,6 +736,7 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.FilterMetric, "filter-metric", "", "Regex to filter metrics by name")
 	flag.StringVar(&cfg.FilterLabel, "filter-label", "", "Regex to filter metrics by label (e.g. 'env=prod')")
 	flag.StringVar(&cfg.DeltaMode, "delta-mode", DeltaModeOff, "Delta mode: off, next, view")
+	flag.BoolVar(&cfg.HideStatic, "hide-static", false, "Hide metrics whose recent values never change")
 
 	flag.Parse()
 

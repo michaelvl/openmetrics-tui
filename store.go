@@ -74,6 +74,26 @@ func (s *MetricSeries) ValuesWithDeltas(mode string) []float64 {
 	return res
 }
 
+// IsStatic reports whether all retained non-NaN values are equal.
+// Returns false if fewer than 2 non-NaN samples are available (not enough
+// data to judge).
+func (s *MetricSeries) IsStatic() bool {
+	first := math.NaN()
+	count := 0
+	for _, v := range s.Values {
+		if math.IsNaN(v) {
+			continue
+		}
+		if count == 0 {
+			first = v
+		} else if v != first {
+			return false
+		}
+		count++
+	}
+	return count >= 2
+}
+
 type Store struct {
 	Metrics      map[string]*MetricSeries
 	HistoryLimit int

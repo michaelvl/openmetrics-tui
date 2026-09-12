@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +62,23 @@ type model struct {
 	labelStyle          lipgloss.Style
 	currentValueStyle   lipgloss.Style
 	deltaValueStyle     lipgloss.Style
+	cursorStyle         lipgloss.Style
+
+	// view is the top-level view on screen; the two remember their scroll
+	// position independently so switching back and forth is a round trip.
+	view           ViewMode
+	metricsYOffset int
+	distYOffset    int
+
+	// bucketMode, distCursor, expanded and zoomed belong to the distribution
+	// view. expanded and zoomed are keyed by store signature, so the accordion
+	// survives a scrape that reorders nothing but could otherwise invalidate an
+	// index. zoomed is empty when no family has the screen to itself.
+	bucketMode     BucketMode
+	distCursor     int
+	distCursorSpan cursorSpan
+	expanded       map[string]bool
+	zoomed         string
 }
 
 type tickMsg time.Time
@@ -91,6 +109,7 @@ func main() {
 	labelStyle := lipgloss.NewStyle().Faint(true)
 	currentValueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")) // brighter magenta
 	deltaValueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("208"))   // orange
+	cursorStyle := lipgloss.NewStyle().Background(lipgloss.Color("238"))
 
 	m := model{
 		cfg:               cfg,
@@ -102,6 +121,11 @@ func main() {
 		labelStyle:        labelStyle,
 		currentValueStyle: currentValueStyle,
 		deltaValueStyle:   deltaValueStyle,
+		cursorStyle:       cursorStyle,
+		// Raw cumulative counters are the least readable of the three bucket
+		// modes, so open on the most readable one.
+		bucketMode: BucketModePerBucketDelta,
+		expanded:   make(map[string]bool),
 	}
 
 	if _, err := tea.NewProgram(m).Run(); err != nil {
@@ -151,11 +175,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cfg.LabelMode = LabelModeShowAll
 				}
 			}
-			// Update viewport content when label mode changes
-			if m.viewportReady {
-				tableStr := m.buildTable()
-				m.viewport.SetContent(tableStr)
-			}
+			m.refresh()
 			return m, nil
 		case "d":
 			// Cycle through delta modes: off -> next -> view -> off
@@ -169,29 +189,56 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				m.cfg.DeltaMode = DeltaModeOff
 			}
-			// Update viewport content when delta mode changes
-			if m.viewportReady {
-				tableStr := m.buildTable()
-				m.viewport.SetContent(tableStr)
-			}
+			m.refresh()
 			return m, nil
 		case "p":
 			m.isPaused = !m.isPaused
 			return m, nil
 		case "s":
 			m.cfg.HideStatic = !m.cfg.HideStatic
-			// Update viewport content when hide-static mode changes
-			if m.viewportReady {
-				tableStr := m.buildTable()
-				m.viewport.SetContent(tableStr)
-			}
+			m.refresh()
 			return m, nil
-		default:
-			// Delegate other keys to viewport for scrolling
-			if m.viewportReady {
-				m.viewport, cmd = m.viewport.Update(msg)
-				return m, cmd
+		case "v":
+			m.toggleView()
+			return m, nil
+		case "b":
+			// Scoped to the distribution view: the bucket mode means nothing in the
+			// metrics view, where b stays the viewport's page-up key.
+			if m.view == ViewDistributions {
+				m.bucketMode = m.bucketMode.next()
+				m.refresh()
+				return m, nil
 			}
+		case "enter":
+			if m.view == ViewDistributions {
+				m.expandStep()
+				return m, nil
+			}
+		case "esc":
+			if m.view == ViewDistributions {
+				m.collapseStep()
+				return m, nil
+			}
+		case "up", "down", "k", "j":
+			// In the distribution view these move the cursor rather than the
+			// viewport; refresh scrolls far enough to keep the cursor on screen.
+			// A zoomed family is the only thing on screen, so there is nothing to
+			// point at and the keys go back to scrolling its grid.
+			if m.view == ViewDistributions && m.zoomed == "" {
+				delta := -1
+				if key := msg.String(); key == "down" || key == "j" {
+					delta = 1
+				}
+				m.moveCursor(delta)
+				return m, nil
+			}
+		}
+
+		// Anything not handled above, plus the view-scoped keys in the view they do
+		// not apply to, falls through to the viewport for scrolling.
+		if m.viewportReady {
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
 		}
 	case tickMsg:
 		if m.isPaused {
@@ -209,11 +256,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isConnected = true
 		m.connectionError = nil
 		m.lastSuccessfulFetch = time.Now()
-		// Update viewport content with new data
-		if m.viewportReady {
-			tableStr := m.buildTable()
-			m.viewport.SetContent(tableStr)
-		}
+		m.refresh()
 		return m, nil
 	case error:
 		// Store connection error but keep retrying
@@ -242,14 +285,168 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.Height = viewportHeight
 		}
 
-		// Update viewport content with current table
-		if m.viewportReady {
-			tableStr := m.buildTable()
-			m.viewport.SetContent(tableStr)
-		}
+		m.refresh()
 	}
 
 	return m, nil
+}
+
+// refresh rebuilds the viewport content for whichever view is on screen. Every
+// key that changes what is displayed ends in a call to this.
+func (m *model) refresh() {
+	if !m.viewportReady {
+		return
+	}
+	if m.view != ViewDistributions {
+		m.viewport.SetContent(m.buildTable())
+		return
+	}
+	m.clampDistState()
+	content, span := m.renderDistributions()
+	m.viewport.SetContent(content)
+	if m.zoomed != "" {
+		// A zoomed grid has no cursor to follow, and the user scrolls it by hand;
+		// a scrape must not yank the view back to the top under them.
+		return
+	}
+	m.distCursorSpan = span
+	m.revealSpan(span)
+}
+
+// expandStep walks the accordion one rung up - collapsed, expanded, zoomed - so
+// one key reaches every level of detail and stops at the top rather than cycling
+// back to where the user came from.
+func (m *model) expandStep() {
+	entries := m.visibleDistributions()
+	if m.distCursor < 0 || m.distCursor >= len(entries) {
+		return
+	}
+	sig := entries[m.distCursor].sig
+	switch {
+	case !m.expanded[sig]:
+		m.expanded[sig] = true
+	case m.zoomed != sig:
+		m.zoomed = sig
+		if m.viewportReady {
+			m.viewport.SetYOffset(0)
+		}
+	default:
+		return
+	}
+	m.refresh()
+}
+
+// collapseStep walks back down the same ladder, one rung per press.
+func (m *model) collapseStep() {
+	if m.zoomed != "" {
+		m.zoomed = ""
+		if m.viewportReady {
+			// The zoomed grid may have been scrolled far past the end of the list
+			// that is about to replace it.
+			m.viewport.SetYOffset(0)
+		}
+		m.refresh()
+		return
+	}
+	entries := m.visibleDistributions()
+	if m.distCursor < 0 || m.distCursor >= len(entries) {
+		return
+	}
+	delete(m.expanded, entries[m.distCursor].sig)
+	m.refresh()
+}
+
+// toggleView switches between the two views, remembering each one's scroll
+// position so that pressing v twice is a round trip. The content is replaced
+// before the offset is restored, because the viewport clamps an offset against
+// whatever it currently holds - not against what is about to be put in it.
+func (m *model) toggleView() {
+	if !m.viewportReady {
+		if m.view == ViewMetrics {
+			m.view = ViewDistributions
+		} else {
+			m.view = ViewMetrics
+		}
+		return
+	}
+
+	if m.view == ViewMetrics {
+		m.metricsYOffset = m.viewport.YOffset
+		m.view = ViewDistributions
+		m.viewport.SetYOffset(0)
+		m.refresh()
+		m.viewport.SetYOffset(m.distYOffset)
+		if m.zoomed == "" {
+			// The remembered offset may predate a shorter list, hiding the cursor.
+			// A zoomed grid has no cursor, and distCursorSpan still refers to the
+			// list it was last measured against, so honouring it would jump.
+			m.revealSpan(m.distCursorSpan)
+		}
+		return
+	}
+
+	m.distYOffset = m.viewport.YOffset
+	m.view = ViewMetrics
+	m.viewport.SetYOffset(0)
+	m.refresh()
+	m.viewport.SetYOffset(m.metricsYOffset)
+}
+
+// moveCursor moves the distribution cursor by delta, clamping at both ends rather
+// than wrapping so holding a key cannot silently jump to the far end of the list.
+func (m *model) moveCursor(delta int) {
+	m.distCursor += delta
+	m.refresh()
+}
+
+// clampDistState keeps the cursor on a row that exists and drops a zoom whose
+// family has gone, since filters, the hide-static toggle and the exporter itself
+// all change the list out from under both.
+func (m *model) clampDistState() {
+	entries := m.visibleDistributions()
+	if m.distCursor >= len(entries) {
+		m.distCursor = len(entries) - 1
+	}
+	if m.distCursor < 0 {
+		m.distCursor = 0
+	}
+	if m.zoomed == "" {
+		return
+	}
+	for _, entry := range entries {
+		if entry.sig == m.zoomed {
+			return
+		}
+	}
+	m.zoomed = ""
+}
+
+// revealSpan nudges the viewport just far enough to show the cursor's line and
+// the grid expanded beneath it, leaving the offset untouched when the span is
+// already on screen so a scrape does not jump the view.
+//
+// A block taller than the viewport cannot be shown whole, so it is anchored at
+// the cursor line and the rest is left to the user's own scrolling. An offset
+// that already sits inside such a span is one the user scrolled to deliberately
+// and is left alone, rather than being dragged back to the top of the block on
+// every scrape while they read further down it.
+func (m *model) revealSpan(span cursorSpan) {
+	height := m.viewport.Height
+	top := m.viewport.YOffset
+	bottom := top + height - 1
+
+	switch {
+	case span.start >= top && span.end <= bottom:
+		return
+	case span.end-span.start+1 > height:
+		if top < span.start || top > span.end {
+			m.viewport.SetYOffset(span.start)
+		}
+	case span.start < top:
+		m.viewport.SetYOffset(span.start)
+	default:
+		m.viewport.SetYOffset(span.end - height + 1)
+	}
 }
 
 func (m model) View() string {
@@ -282,6 +479,14 @@ func (m model) View() string {
 		pauseStatus = " | " + pauseStyle.Render("⏸  PAUSED")
 	}
 
+	// Build the view indicator. It names the key as well as the view, because it
+	// is the only place the second view is advertised outside the help overlay.
+	viewName := "Metrics"
+	if m.view == ViewDistributions {
+		viewName = "Distributions"
+	}
+	viewStatus := lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Render("v: " + viewName)
+
 	// Build hide-static status
 	var hideStaticStatus string
 	if m.cfg.HideStatic {
@@ -300,9 +505,10 @@ func (m model) View() string {
 	}
 
 	// Calculate available space for error/URL message
-	fixedPrefix := "? for help | Deltas: "
+	fixedPrefix := "? for help |  | Deltas: "
 	fixedSeparator := " | "
 	fixedWidth := lipgloss.Width(fixedPrefix) +
+		lipgloss.Width(viewStatus) +
 		lipgloss.Width(deltasStatus) +
 		lipgloss.Width(pauseStatus) +
 		lipgloss.Width(hideStaticStatus) +
@@ -332,7 +538,8 @@ func (m model) View() string {
 		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● ") + url
 	}
 
-	footer := fmt.Sprintf("? for help | Deltas: %s%s%s | %s%s", deltasStatus, pauseStatus, hideStaticStatus, statusIndicator, scrollHints)
+	footer := fmt.Sprintf("? for help | %s | Deltas: %s%s%s | %s%s",
+		viewStatus, deltasStatus, pauseStatus, hideStaticStatus, statusIndicator, scrollHints)
 
 	// Show help popup if toggled
 	output := m.viewport.View() + "\n" + footer
@@ -364,7 +571,11 @@ Help
   d           Cycle delta mode (off/next/view)
   p           Pause/unpause updates
   s           Toggle hiding static (unchanging) metrics
-  ↑/↓         Scroll up/down
+  v           Switch between metrics and distributions
+  b           Cycle bucket values (distribution view)
+  enter       Expand a distribution, then zoom it full screen
+  esc         Step back down: zoomed -> expanded -> collapsed
+  ↑/↓         Scroll, or move the cursor in the distribution view
   PgUp/PgDn   Page up/down
   Home/End    Go to top/bottom
 
@@ -441,6 +652,48 @@ func getFilteredLabelKeys(filterLabel string) []string {
 
 	// Fallback regex pattern - can't determine specific keys
 	return []string{}
+}
+
+// matchesFilters reports whether a series passes the -filter-metric and
+// -filter-label options. Both views share it, so a filter means the same thing
+// whether it is applied to a gauge or to a histogram family.
+func (m model) matchesFilters(name string, labels map[string]string) bool {
+	if m.cfg.FilterMetric != "" {
+		matched, _ := regexp.MatchString(m.cfg.FilterMetric, name)
+		if !matched {
+			return false
+		}
+	}
+	if m.cfg.FilterLabel == "" {
+		return true
+	}
+
+	// Check for key=value or key=~value
+	if idx := strings.Index(m.cfg.FilterLabel, "="); idx != -1 {
+		key := m.cfg.FilterLabel[:idx]
+		rest := m.cfg.FilterLabel[idx+1:]
+
+		val, ok := labels[key]
+		if !ok {
+			return false
+		}
+
+		// Check if it is a regex match (starts with ~)
+		if strings.HasPrefix(rest, "~") {
+			matched, _ := regexp.MatchString(rest[1:], val)
+			return matched
+		}
+		// Exact match
+		return val == rest
+	}
+
+	// Fallback: match value against regex (original behavior)
+	for _, v := range labels {
+		if ok, _ := regexp.MatchString(m.cfg.FilterLabel, v); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func calculateColumnWidths(headers []string, rows [][]string) []int {
@@ -581,6 +834,21 @@ func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
 	return rows
 }
 
+// distributionHint points at the other view when this one has nothing to show
+// but histograms were scraped - otherwise an exporter that publishes only
+// histograms looks like an exporter that publishes nothing at all.
+func (m model) distributionHint() string {
+	count := len(m.store.Distributions)
+	if count == 0 {
+		return ""
+	}
+	noun := "distributions"
+	if count == 1 {
+		noun = "distribution"
+	}
+	return fmt.Sprintf("\n\n%d %s scraped - press v to see them", count, noun)
+}
+
 func (m model) buildTable() string {
 	// Filter metrics first
 	var filteredSeries []*MetricSeries
@@ -592,50 +860,8 @@ func (m model) buildTable() string {
 
 	for _, k := range keys {
 		series := m.store.Metrics[k]
-		// Apply filters
-		if m.cfg.FilterMetric != "" {
-			matched, _ := regexp.MatchString(m.cfg.FilterMetric, series.Name)
-			if !matched {
-				continue
-			}
-		}
-		if m.cfg.FilterLabel != "" {
-			matched := false
-
-			// Check for key=value or key=~value
-			if idx := strings.Index(m.cfg.FilterLabel, "="); idx != -1 {
-				key := m.cfg.FilterLabel[:idx]
-				rest := m.cfg.FilterLabel[idx+1:]
-
-				// Check if it is a regex match (starts with ~)
-				if strings.HasPrefix(rest, "~") {
-					pattern := rest[1:]
-					if val, ok := series.Labels[key]; ok {
-						if ok, _ := regexp.MatchString(pattern, val); ok {
-							matched = true
-						}
-					}
-				} else {
-					// Exact match
-					if val, ok := series.Labels[key]; ok {
-						if val == rest {
-							matched = true
-						}
-					}
-				}
-			} else {
-				// Fallback: match value against regex (original behavior)
-				for _, v := range series.Labels {
-					if ok, _ := regexp.MatchString(m.cfg.FilterLabel, v); ok {
-						matched = true
-						break
-					}
-				}
-			}
-
-			if !matched {
-				continue
-			}
+		if !m.matchesFilters(series.Name, series.Labels) {
+			continue
 		}
 		if m.cfg.HideStatic && series.IsStatic() {
 			continue
@@ -645,7 +871,7 @@ func (m model) buildTable() string {
 
 	if len(filteredSeries) == 0 {
 		if len(m.store.Metrics) == 0 {
-			return "No metrics to display"
+			return "No metrics to display" + m.distributionHint()
 		}
 		var reasons []string
 		if m.cfg.FilterMetric != "" {
@@ -658,9 +884,10 @@ func (m model) buildTable() string {
 			reasons = append(reasons, "hide-static")
 		}
 		if len(reasons) == 0 {
-			return "No metrics to display"
+			return "No metrics to display" + m.distributionHint()
 		}
-		return fmt.Sprintf("No metrics to display (all %d metrics hidden by: %s)", len(m.store.Metrics), strings.Join(reasons, ", "))
+		return fmt.Sprintf("No metrics to display (all %d metrics hidden by: %s)%s",
+			len(m.store.Metrics), strings.Join(reasons, ", "), m.distributionHint())
 	}
 
 	// Build rows with all possible columns first
@@ -777,9 +1004,76 @@ func parseFlags() Config {
 	return cfg
 }
 
+// formatFloat renders a value for a grid cell, exactly enough that small
+// numbers stay distinguishable from zero. Integers are exact; fractions carry
+// roughly three significant digits without ever dropping an integer digit, so
+// 0.0034 stays 0.0034 and 21203 stays 21203.
+//
+// The previous "%.2f" rounded any latency below 10ms to "0", making a healthy
+// p99 indistinguishable from no observations at all.
 func formatFloat(val float64) string {
-	s := fmt.Sprintf("%.2f", val)
+	if math.IsNaN(val) {
+		return "NaN"
+	}
+	abs := math.Abs(val)
+	if math.IsInf(val, 0) || abs >= 1e15 {
+		// Beyond float64's exact integer range "%f" spells out meaningless
+		// digits; fall back to the exponent form.
+		return strconv.FormatFloat(val, 'g', 3, 64)
+	}
+	if val == math.Trunc(val) {
+		return strconv.FormatFloat(val, 'f', -1, 64)
+	}
+
+	// Decimal places chosen so the result carries ~3 significant digits. Below 1
+	// the leading zeros are not significant, so let 'g' count digits instead.
+	var s string
+	switch {
+	case abs >= 100:
+		s = strconv.FormatFloat(val, 'f', 0, 64)
+	case abs >= 10:
+		s = strconv.FormatFloat(val, 'f', 1, 64)
+	case abs >= 1:
+		s = strconv.FormatFloat(val, 'f', 2, 64)
+	default:
+		s = strconv.FormatFloat(val, 'g', 3, 64)
+	}
+	return trimTrailingZeros(s)
+}
+
+// formatCompact renders a value with an SI suffix. Used only where width is at a
+// premium - the collapsed distribution line's count and rate columns - never in
+// a grid cell, where an exact value matters more than a short one.
+func formatCompact(val float64) string {
+	abs := math.Abs(val)
+	if math.IsNaN(val) || math.IsInf(val, 0) || abs < 1000 {
+		return formatFloat(val)
+	}
+
+	for _, unit := range []struct {
+		limit  float64
+		suffix string
+	}{{1e12, "T"}, {1e9, "G"}, {1e6, "M"}, {1e3, "k"}} {
+		if abs < unit.limit {
+			continue
+		}
+		scaled := val / unit.limit
+		// One decimal below 100 (12.4k), none above (124k) - three digits either way.
+		decimals := 0
+		if math.Abs(scaled) < 100 {
+			decimals = 1
+		}
+		return trimTrailingZeros(strconv.FormatFloat(scaled, 'f', decimals, 64)) + unit.suffix
+	}
+	return formatFloat(val)
+}
+
+// trimTrailingZeros drops the padding "%f" adds, but only from a fractional
+// part - "1200" must not become "12".
+func trimTrailingZeros(s string) string {
+	if !strings.Contains(s, ".") || strings.ContainsAny(s, "eE") {
+		return s
+	}
 	s = strings.TrimRight(s, "0")
-	s = strings.TrimRight(s, ".")
-	return s
+	return strings.TrimSuffix(s, ".")
 }

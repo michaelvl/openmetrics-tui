@@ -3,9 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -44,10 +46,19 @@ type MetricsState struct {
 	// Request duration gauge (current slowest request)
 	httpRequestDurationCurrent map[string]float64 // key: "method:endpoint"
 
-	// Histogram (existing)
-	histBuckets []float64
-	histSum     float64
-	histCount   float64
+	// Histogram, now one series per handler. Each handler has a differently
+	// shaped latency distribution, which is what makes the histogram view worth
+	// looking at: a single number cannot tell them apart, a bucket grid can.
+	histBuckets map[string][]float64 // key: handler
+	histSum     map[string]float64
+	histCount   map[string]float64
+
+	// A second histogram over an entirely different quantity, and so with an
+	// entirely different bucket layout. Bounds are not a shared axis across
+	// families, and this is what makes that visible end to end.
+	sizeBuckets []float64
+	sizeSum     float64
+	sizeCount   float64
 
 	// Summary (existing)
 	rpcQuantiles map[float64]float64
@@ -75,9 +86,12 @@ func NewMetricsState() *MetricsState {
 		bandwidthUsageMbps:         make(map[string]float64),
 		httpRequestDurationCurrent: make(map[string]float64),
 		rateLimitCounters:          make(map[string]int),
-		histBuckets:                []float64{24054, 33444, 100392, 129389, 133988, 144320},
-		histSum:                    53423,
-		histCount:                  144320,
+		histBuckets:                make(map[string][]float64),
+		histSum:                    make(map[string]float64),
+		histCount:                  make(map[string]float64),
+		sizeBuckets:                []float64{9041, 40223, 118904, 143122, 144320},
+		sizeSum:                    1.8452e+09,
+		sizeCount:                  144320,
 		rpcQuantiles: map[float64]float64{
 			0.01: 3102,
 			0.05: 3272,
@@ -88,6 +102,21 @@ func NewMetricsState() *MetricsState {
 		rpcSum:      1.7560473e+07,
 		rpcCount:    2693,
 		memoryUsage: 1024 * 1024 * 512, // 512MB
+	}
+
+	// Seed each handler's histogram with a history that already matches its
+	// profile, so the view has a shape to show before the first tick lands.
+	for _, handler := range latencyHandlers {
+		buckets := make([]float64, len(latencyBounds)+1)
+		total := 0.0
+		for i := 0; i < 4000; i++ {
+			duration := sampleLatency(handler)
+			total += duration
+			observeLatency(buckets, duration)
+		}
+		s.histBuckets[handler] = buckets
+		s.histSum[handler] = total
+		s.histCount[handler] = 4000
 	}
 
 	// Initialize HTTP request counters with realistic starting values
@@ -338,17 +367,25 @@ func (s *MetricsState) Update() {
 	s.bandwidthUsageMbps["inbound"] = 10 + 15*math.Sin(float64(time.Now().Unix()%120)/20.0) + rand.Float64()*5
 	s.bandwidthUsageMbps["outbound"] = 20 + 20*math.Sin(float64(time.Now().Unix()%120)/20.0) + rand.Float64()*10
 
-	// Update existing histogram
-	duration := rand.Float64() * 1.2
-	s.histSum += duration
-	s.histCount++
-	thresholds := []float64{0.05, 0.1, 0.2, 0.5, 1.0}
-	for i, threshold := range thresholds {
-		if duration <= threshold {
-			s.histBuckets[i]++
+	// Update the per-handler latency histograms. Several observations per tick,
+	// so a per-scrape bucket delta has something to show rather than a row of
+	// ones and zeroes.
+	for _, handler := range latencyHandlers {
+		for i := 0; i < 20+rand.Intn(40); i++ {
+			duration := sampleLatency(handler)
+			s.histSum[handler] += duration
+			s.histCount[handler]++
+			observeLatency(s.histBuckets[handler], duration)
 		}
 	}
-	s.histBuckets[5]++
+
+	// Update the response size histogram
+	for i := 0; i < 30+rand.Intn(60); i++ {
+		size := sampleResponseSize()
+		s.sizeSum += size
+		s.sizeCount++
+		observe(s.sizeBuckets, sizeBounds, size)
+	}
 
 	// Update existing summary
 	for k := range s.rpcQuantiles {
@@ -507,17 +544,24 @@ func (s *MetricsState) Write(w http.ResponseWriter) {
 	}
 	fmt.Fprintln(w)
 
-	// Existing histogram
+	// Latency histogram, one label set per handler
 	fmt.Fprintln(w, "# HELP http_request_duration_seconds A histogram of the request duration.")
 	fmt.Fprintln(w, "# TYPE http_request_duration_seconds histogram")
-	fmt.Fprintf(w, "http_request_duration_seconds_bucket{le=\"0.05\"} %.0f\n", s.histBuckets[0])
-	fmt.Fprintf(w, "http_request_duration_seconds_bucket{le=\"0.1\"} %.0f\n", s.histBuckets[1])
-	fmt.Fprintf(w, "http_request_duration_seconds_bucket{le=\"0.2\"} %.0f\n", s.histBuckets[2])
-	fmt.Fprintf(w, "http_request_duration_seconds_bucket{le=\"0.5\"} %.0f\n", s.histBuckets[3])
-	fmt.Fprintf(w, "http_request_duration_seconds_bucket{le=\"1\"} %.0f\n", s.histBuckets[4])
-	fmt.Fprintf(w, "http_request_duration_seconds_bucket{le=\"+Inf\"} %.0f\n", s.histBuckets[5])
-	fmt.Fprintf(w, "http_request_duration_seconds_sum %.2f\n", s.histSum)
-	fmt.Fprintf(w, "http_request_duration_seconds_count %.0f\n", s.histCount)
+	for _, handler := range latencyHandlers {
+		writeBuckets(w, "http_request_duration_seconds",
+			fmt.Sprintf("handler=\"%s\"", handler), latencyBounds, s.histBuckets[handler])
+		fmt.Fprintf(w, "http_request_duration_seconds_sum{handler=\"%s\"} %.2f\n", handler, s.histSum[handler])
+		fmt.Fprintf(w, "http_request_duration_seconds_count{handler=\"%s\"} %.0f\n", handler, s.histCount[handler])
+	}
+	fmt.Fprintln(w)
+
+	// Response size histogram, over bounds that share nothing with the latency
+	// family above
+	fmt.Fprintln(w, "# HELP http_response_size_bytes A histogram of the response size.")
+	fmt.Fprintln(w, "# TYPE http_response_size_bytes histogram")
+	writeBuckets(w, "http_response_size_bytes", "", sizeBounds, s.sizeBuckets)
+	fmt.Fprintf(w, "http_response_size_bytes_sum %.0f\n", s.sizeSum)
+	fmt.Fprintf(w, "http_response_size_bytes_count %.0f\n", s.sizeCount)
 	fmt.Fprintln(w)
 
 	// Existing summary
@@ -536,6 +580,80 @@ func (s *MetricsState) Write(w http.ResponseWriter) {
 	fmt.Fprintln(w, "# HELP memory_usage_bytes Current memory usage in bytes.")
 	fmt.Fprintln(w, "# TYPE memory_usage_bytes gauge")
 	fmt.Fprintf(w, "memory_usage_bytes %.0f %d\n", s.memoryUsage, timestamp)
+}
+
+// latencyHandlers each get a differently shaped latency distribution. A single
+// quantile cannot tell them apart - /slow and /bimodal can share a p50 - but a
+// bucket grid shows /fast piled into the low buckets, /slow into the high ones,
+// and /bimodal split into two bands with an empty gap between them.
+var latencyHandlers = []string{"/bimodal", "/fast", "/slow"}
+
+// latencyBounds and sizeBounds deliberately share nothing. Bucket bounds are per
+// family, so two histograms cannot be laid out against one common axis, and the
+// view has to give each family its own block.
+var (
+	latencyBounds = []float64{0.05, 0.1, 0.2, 0.5, 1.0}
+	sizeBounds    = []float64{64, 512, 4096, 65536}
+)
+
+func sampleLatency(handler string) float64 {
+	switch handler {
+	case "/fast":
+		return rand.Float64() * 0.15
+	case "/slow":
+		return 0.3 + rand.Float64()*0.9
+	default:
+		// Bimodal: a cache hit or a cache miss, with nothing in between.
+		if rand.Float64() < 0.7 {
+			return rand.Float64() * 0.08
+		}
+		return 0.6 + rand.Float64()*0.5
+	}
+}
+
+func sampleResponseSize() float64 {
+	// Mostly small JSON bodies, with the occasional large listing.
+	if rand.Float64() < 0.85 {
+		return 200 + rand.Float64()*3000
+	}
+	return 10000 + rand.Float64()*120000
+}
+
+func observeLatency(buckets []float64, duration float64) {
+	observe(buckets, latencyBounds, duration)
+}
+
+// observe records one value into cumulative buckets: every bucket whose upper
+// bound the value is within, plus the +Inf bucket that holds everything.
+func observe(buckets, bounds []float64, value float64) {
+	for i, bound := range bounds {
+		if value <= bound {
+			buckets[i]++
+		}
+	}
+	buckets[len(bounds)]++
+}
+
+// writeBuckets emits cumulative buckets in the text format, with the +Inf bucket
+// last. labels is the family's own label set, without the le label.
+func writeBuckets(w io.Writer, name, labels string, bounds, buckets []float64) {
+	for i, bound := range bounds {
+		fmt.Fprintf(w, "%s_bucket{%s} %.0f\n", name, joinLabels(labels, fmt.Sprintf("le=%q", formatBound(bound))), buckets[i])
+	}
+	fmt.Fprintf(w, "%s_bucket{%s} %.0f\n", name, joinLabels(labels, `le="+Inf"`), buckets[len(bounds)])
+}
+
+func joinLabels(a, b string) string {
+	if a == "" {
+		return b
+	}
+	return a + "," + b
+}
+
+// formatBound renders a bound the way the text format does, so "le=1" stays "1"
+// rather than becoming "1.0".
+func formatBound(bound float64) string {
+	return strconv.FormatFloat(bound, 'g', -1, 64)
 }
 
 func parseKey(key string, expectedParts int) []string {

@@ -262,11 +262,6 @@ func (spec aggSpec) fold(group []*MetricSeries) *MetricSeries {
 		}
 	}
 
-	values := make([]float64, length)
-	for i := range values {
-		values[i] = spec.foldAt(group, length-1-i)
-	}
-
 	return &MetricSeries{
 		// Decorating the name is what tells the user a row is derived. Doing it
 		// here rather than in the renderer means column widths and styling need no
@@ -275,8 +270,20 @@ func (spec aggSpec) fold(group []*MetricSeries) *MetricSeries {
 		Name:   fmt.Sprintf("%s(%s)", spec.op, first.Name),
 		Kind:   first.Kind,
 		Labels: spec.retainLabels(first.Labels),
-		Values: values,
+		Values: spec.foldValues(group, length),
 	}
+}
+
+// foldValues reduces a group to exactly length values, right-aligned so that the
+// last one is this scrape. The length is a parameter rather than the longest
+// member, because a distribution folds several groups - one per bucket - that all
+// have to land on the same time axis.
+func (spec aggSpec) foldValues(group []*MetricSeries, length int) []float64 {
+	values := make([]float64, length)
+	for i := range values {
+		values[i] = spec.foldAt(group, length-1-i)
+	}
+	return values
 }
 
 // foldAt reduces one scrape's worth of a group. offset counts back from the
@@ -325,4 +332,178 @@ func (spec aggSpec) foldAt(group []*MetricSeries, offset int) float64 {
 		return acc / float64(count)
 	}
 	return acc
+}
+
+// Distributions aggregate too, but only with sum, and only histograms.
+//
+// A histogram's buckets are observation counts over shared bounds, so adding two
+// families bucket by bucket yields exactly the histogram one process would have
+// reported had it done all the work - which is what makes the folded family's
+// quantiles, count and rate worth reading. No other operator survives that test:
+// the average or the maximum of two bucket counts is not the histogram of
+// anything, and a p99 estimated from it would describe a distribution that never
+// existed. A non-sum operator therefore leaves this view's list alone rather than
+// dressing up nonsense as latencies, and the view's header says so.
+//
+// Summaries are left alone for the same reason: their points are quantiles the
+// exporter already computed, and no arithmetic on two p99s gives the p99 of the
+// combined stream.
+
+// aggregateDistributions folds the visible families according to the aggregation
+// field. Entries it cannot fold come back untouched, so the list stays complete
+// whatever the field says.
+func (m model) aggregateDistributions(entries []distEntry) []distEntry {
+	return parseAggregation(m.cfg.Aggregation).aggregateDistributions(entries)
+}
+
+func (spec aggSpec) aggregateDistributions(entries []distEntry) []distEntry {
+	if !spec.active || spec.op != aggSum {
+		return entries
+	}
+
+	groups := make(map[string][]*DistributionSeries)
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		// A summary keys on its own store signature, so it lands in a group of one
+		// and comes back out as itself. A histogram keys the way the scalar fold
+		// does: by name and the grouping labels, never across names.
+		key := entry.sig
+		if entry.dist.Kind == KindHistogram {
+			key = GenerateSignature(entry.dist.Name, spec.retainLabels(entry.dist.Labels))
+		}
+		if _, seen := groups[key]; !seen {
+			keys = append(keys, key)
+		}
+		groups[key] = append(groups[key], entry.dist)
+	}
+	sort.Strings(keys)
+
+	out := make([]distEntry, 0, len(keys))
+	for _, key := range keys {
+		group := groups[key]
+		// The key is what the accordion records expansion and zoom under, so a
+		// folded family has to carry the group key rather than any member's
+		// signature: two members must not each claim their own expanded state for
+		// the one row they now share.
+		entry := distEntry{sig: key, dist: group[0]}
+		if group[0].Kind == KindHistogram {
+			entry.dist = spec.foldDistributions(group)
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// foldDistributions sums a group of histogram families into one synthetic family.
+// The result is an ordinary *DistributionSeries, so the grid, the shading, the
+// quantile estimator and hide-static all go on working on it unchanged.
+func (spec aggSpec) foldDistributions(group []*DistributionSeries) *DistributionSeries {
+	first := group[0]
+	labels := spec.retainLabels(first.Labels)
+	out := &DistributionSeries{
+		// Decorated for the same reason an aggregated table row is: it is the only
+		// thing on the line that says these numbers are derived. The metric-name
+		// filter has already run and never sees the decorated name.
+		Name:   fmt.Sprintf("%s(%s)", spec.op, first.Name),
+		Kind:   first.Kind,
+		Labels: labels,
+	}
+
+	// One length for the whole folded family, so a grid column means the same
+	// scrape in every bucket row even when members have retained different
+	// histories - the same alignment valueAt gives a scraped family.
+	length := 0
+	for _, dist := range group {
+		if n := distScrapeCount(dist); n > length {
+			length = n
+		}
+	}
+
+	for _, bound := range unionBounds(group) {
+		members := make([]*MetricSeries, 0, len(group))
+		for _, dist := range group {
+			if series := dist.findPoint(bound); series != nil {
+				members = append(members, series)
+			}
+		}
+		out.insertPoint(bound, &MetricSeries{
+			Name:   out.Name + "_bucket",
+			Kind:   KindCounter,
+			Labels: withLabel(labels, "le", formatBound(bound)),
+			Values: spec.foldValues(members, length),
+		})
+	}
+
+	out.Sum = spec.foldPart(group, out.Name+"_sum", labels, length,
+		func(dist *DistributionSeries) *MetricSeries { return dist.Sum })
+	out.Count = spec.foldPart(group, out.Name+"_count", labels, length,
+		func(dist *DistributionSeries) *MetricSeries { return dist.Count })
+	return out
+}
+
+// unionBounds is every bound any member reports, ascending with +Inf last, which
+// is the order Points must keep.
+//
+// Bounds are unioned rather than intersected, and a bound only some members carry
+// is summed over the members that carry it. That reads low at such a bound, since
+// the members without it have observations below it that go uncounted there - the
+// same trade PromQL's sum by (le) makes, and the price of staying readable while
+// one target's bucket layout differs or a new bucket appears mid-run. A native
+// histogram has no bounds at all and so contributes nothing here; only its count
+// reaches the folded family.
+func unionBounds(group []*DistributionSeries) []float64 {
+	seen := make(map[float64]bool)
+	bounds := make([]float64, 0, len(group[0].Points))
+	for _, dist := range group {
+		for _, point := range dist.Points {
+			if seen[point.Bound] {
+				continue
+			}
+			seen[point.Bound] = true
+			bounds = append(bounds, point.Bound)
+		}
+	}
+	sort.Float64s(bounds)
+	return bounds
+}
+
+// foldPart sums one of a family's derived series - its sum or its count - across
+// the group, returning nil when no member reports one. A nil Count is how the
+// view tells "the exporter publishes none" from "it publishes zero", so the fold
+// has to preserve that rather than produce an all-NaN series.
+func (spec aggSpec) foldPart(group []*DistributionSeries, name string, labels map[string]string, length int, pick func(*DistributionSeries) *MetricSeries) *MetricSeries {
+	members := make([]*MetricSeries, 0, len(group))
+	for _, dist := range group {
+		if series := pick(dist); series != nil {
+			members = append(members, series)
+		}
+	}
+	if len(members) == 0 {
+		return nil
+	}
+	return &MetricSeries{
+		Name:   name,
+		Kind:   KindCounter,
+		Labels: copyLabels(labels),
+		Values: spec.foldValues(members, length),
+	}
+}
+
+// distAggNote explains what the aggregation field did to this view in the two
+// cases the rows alone do not say: an operator this view will not honour, and
+// summaries it had to leave alone while folding the histograms around them.
+func (m model) distAggNote(entries []distEntry) string {
+	spec := parseAggregation(m.cfg.Aggregation)
+	if !spec.active {
+		return ""
+	}
+	if spec.op != aggSum {
+		return fmt.Sprintf("%s ignored: sum only", spec.op)
+	}
+	for _, entry := range entries {
+		if entry.dist.Kind == KindSummary {
+			return "summaries not summed"
+		}
+	}
+	return ""
 }

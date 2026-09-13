@@ -72,10 +72,24 @@ func (m model) visibleDistributions() []distEntry {
 		if !m.matchesFilters(dist.Name, dist.Labels) {
 			continue
 		}
-		if m.cfg.HideStatic && dist.IsStatic() {
-			continue
-		}
 		entries = append(entries, distEntry{sig: sig, dist: dist})
+	}
+
+	// Filter, then aggregate, then hide static, in the order buildTable gives its
+	// reasons for: folding a filtered-out family in would total series the filter
+	// was asked to exclude, and judging staticness first would drop a member whose
+	// group is not static - the sum over a quiet target and a busy one moves.
+	entries = m.aggregateDistributions(entries)
+
+	if m.cfg.HideStatic {
+		kept := entries[:0]
+		for _, entry := range entries {
+			if entry.dist.IsStatic() {
+				continue
+			}
+			kept = append(kept, entry)
+		}
+		entries = kept
 	}
 	return entries
 }
@@ -117,7 +131,7 @@ func (m model) renderDistributions() (string, cursorSpan) {
 func (m model) renderAccordion(entries []distEntry) (string, cursorSpan) {
 	rows := make([][]string, len(entries))
 	for i, entry := range entries {
-		rows[i] = m.collapsedCells(entry.dist)
+		rows[i] = m.collapsedCells(entry)
 	}
 	widths := calculateColumnWidths(distHeaders, rows)
 	widths[0] = m.fitNameColumn(widths)
@@ -138,7 +152,7 @@ func (m model) renderAccordion(entries []distEntry) (string, cursorSpan) {
 	}
 
 	lines := []string{
-		m.distributionHeader(len(entries)),
+		m.distributionHeader(entries),
 		faintStyle.Render(renderRow(distHeaders, widths)),
 	}
 	cursor := cursorSpan{start: len(lines), end: len(lines)}
@@ -409,16 +423,22 @@ func (m model) historyColumns() int {
 
 // distributionHeader is the view's own title line. It carries the bucket mode
 // because that setting only means anything here, and the footer is already full.
-func (m model) distributionHeader(count int) string {
+// It also carries whatever the aggregation field did not do here, which is the
+// one thing about this view the rows cannot show by themselves.
+func (m model) distributionHeader(entries []distEntry) string {
 	title := lipgloss.NewStyle().Bold(true).Render("DISTRIBUTIONS")
-	hint := faintStyle.Render(fmt.Sprintf(
-		"%d shown | Buckets: %s (b) | enter/esc: expand", count, m.bucketMode))
-	return title + "  " + hint
+	text := fmt.Sprintf("%d shown | Buckets: %s (b) | enter/esc: expand",
+		len(entries), m.bucketMode)
+	if note := m.distAggNote(entries); note != "" {
+		text += " | " + note
+	}
+	return title + "  " + faintStyle.Render(text)
 }
 
 // collapsedCells builds one distribution's summary line as plain text. Styling is
 // applied after widths are known, so a styled cell never throws the layout off.
-func (m model) collapsedCells(dist *DistributionSeries) []string {
+func (m model) collapsedCells(entry distEntry) []string {
+	dist := entry.dist
 	total := distScrapeCount(dist)
 	stats := distSummary(dist, total-1, m.cfg.Interval)
 
@@ -430,7 +450,7 @@ func (m model) collapsedCells(dist *DistributionSeries) []string {
 		rate = formatCompact(stats.Rate) + "/s"
 	}
 
-	cells := []string{m.collapsedName(dist), count, rate}
+	cells := []string{m.collapsedName(entry), count, rate}
 	for _, cell := range stats.Cells {
 		cells = append(cells, formatQuantile(cell))
 	}
@@ -439,11 +459,17 @@ func (m model) collapsedCells(dist *DistributionSeries) []string {
 
 // collapsedName is the family name with its labels, prefixed by the expansion
 // marker. Kept plain; see collapsedCells.
-func (m model) collapsedName(dist *DistributionSeries) string {
+//
+// The marker reads the entry's own signature rather than deriving one from the
+// family, because an aggregated row's name is decorated and its labels are
+// narrowed: a signature rebuilt from those would never match the key the
+// accordion recorded the expansion under.
+func (m model) collapsedName(entry distEntry) string {
 	marker := "▸"
-	if m.expanded[GenerateSignature(dist.Name, dist.Labels)] {
+	if m.expanded[entry.sig] {
 		marker = "▾"
 	}
+	dist := entry.dist
 	name := dist.Name
 	if labels := m.formatDistLabels(dist); labels != "" {
 		name += labels

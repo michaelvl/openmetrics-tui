@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -304,4 +305,265 @@ func TestAggregateSeparatesSeriesLackingTheLabel(t *testing.T) {
 			t.Errorf("unlabelled row = %v, want 100", row.Values)
 		}
 	}
+}
+
+// perPodLatency is two targets reporting the same histogram, with a bucket layout
+// they share and counts that differ.
+const perPodLatency = `# TYPE lat_seconds histogram
+lat_seconds_bucket{pod="a",le="1"} 2
+lat_seconds_bucket{pod="a",le="+Inf"} 4
+lat_seconds_sum{pod="a"} 3
+lat_seconds_count{pod="a"} 4
+lat_seconds_bucket{pod="b",le="1"} 6
+lat_seconds_bucket{pod="b",le="+Inf"} 10
+lat_seconds_sum{pod="b"} 7
+lat_seconds_count{pod="b"} 10
+`
+
+// aggregatedDists is the visible list under an aggregation field, which is where
+// the distribution view applies it.
+func aggregatedDists(t *testing.T, field string, texts ...string) []distEntry {
+	t.Helper()
+	m := distModel(t, 120, texts...)
+	m.cfg.Aggregation = field
+	return m.visibleDistributions()
+}
+
+// bucketValues reads a family's newest scrape, bound by bound, for comparison
+// against what the members reported.
+func bucketValues(dist *DistributionSeries) map[string]float64 {
+	total := distScrapeCount(dist)
+	got := make(map[string]float64, len(dist.Points))
+	for _, point := range dist.Points {
+		got[formatBound(point.Bound)] = valueAt(point.Series, total-1, total)
+	}
+	return got
+}
+
+// Adding two histograms bucket by bucket is the one fold that yields a histogram:
+// the counts, the sum and the buckets are all additive.
+func TestDistributionsSumBucketByBucket(t *testing.T) {
+	got := aggregatedDists(t, "sum", perPodLatency)
+	if len(got) != 1 {
+		t.Fatalf("got %d families, want the two pods folded into one: %v", len(got), got)
+	}
+	dist := got[0].dist
+	if dist.Name != "sum(lat_seconds)" {
+		t.Errorf("Name = %q, want the operator to name the family", dist.Name)
+	}
+	if _, ok := dist.Labels["pod"]; ok {
+		t.Errorf("aggregated-away label survived in %v", dist.Labels)
+	}
+
+	want := map[string]float64{"1": 8, "+Inf": 14}
+	if buckets := bucketValues(dist); !reflect.DeepEqual(buckets, want) {
+		t.Errorf("buckets = %v, want %v", buckets, want)
+	}
+
+	total := distScrapeCount(dist)
+	if count := valueAt(dist.Count, total-1, total); count != 14 {
+		t.Errorf("count = %v, want 14", count)
+	}
+	if sum := valueAt(dist.Sum, total-1, total); sum != 10 {
+		t.Errorf("sum = %v, want 10", sum)
+	}
+}
+
+func TestDistributionSumGroupsByTheNamedLabels(t *testing.T) {
+	const twoEnvs = `# TYPE lat_seconds histogram
+lat_seconds_bucket{env="prod",pod="a",le="+Inf"} 4
+lat_seconds_count{env="prod",pod="a"} 4
+lat_seconds_bucket{env="prod",pod="b",le="+Inf"} 10
+lat_seconds_count{env="prod",pod="b"} 10
+lat_seconds_bucket{env="dev",pod="c",le="+Inf"} 1
+lat_seconds_count{env="dev",pod="c"} 1
+`
+	got := aggregatedDists(t, "env", twoEnvs)
+	if len(got) != 2 {
+		t.Fatalf("got %d families, want one per env: %v", len(got), got)
+	}
+	// Sorted by signature, so dev precedes prod.
+	if got[0].dist.Labels["env"] != "dev" || bucketValues(got[0].dist)["+Inf"] != 1 {
+		t.Errorf("dev family = %v %v, want env=dev and 1", got[0].dist.Labels, bucketValues(got[0].dist))
+	}
+	if got[1].dist.Labels["env"] != "prod" || bucketValues(got[1].dist)["+Inf"] != 14 {
+		t.Errorf("prod family = %v %v, want env=prod and 14", got[1].dist.Labels, bucketValues(got[1].dist))
+	}
+}
+
+// Only sum yields a histogram. An avg or a max of two bucket counts is the
+// histogram of nothing, and a p99 read off it would describe a distribution that
+// never existed - so the list is left alone and the header says why.
+func TestOnlySumFoldsDistributions(t *testing.T) {
+	for _, field := range []string{"avg pod", "min pod", "max pod", "count pod"} {
+		t.Run(field, func(t *testing.T) {
+			got := aggregatedDists(t, field, perPodLatency)
+			if len(got) != 2 {
+				t.Fatalf("got %d families, want both pods left alone: %v", len(got), got)
+			}
+			for _, entry := range got {
+				if strings.Contains(entry.dist.Name, "(") {
+					t.Errorf("Name = %q, want an untouched family", entry.dist.Name)
+				}
+			}
+
+			m := distModel(t, 120, perPodLatency)
+			m.cfg.Aggregation = field
+			header := plain(strings.SplitN(mustRender(t, m), "\n", 2)[0])
+			if !strings.Contains(header, "ignored: sum only") {
+				t.Errorf("header does not say the operator was ignored:\n%s", header)
+			}
+		})
+	}
+}
+
+// A summary's points are quantiles the exporter already reduced, and no
+// arithmetic on two p99s gives the p99 of the combined stream. The histograms
+// around it still fold.
+func TestSummariesAreNotSummed(t *testing.T) {
+	m := distModel(t, 120, perPodLatency+summaryFixture)
+	m.cfg.Aggregation = "sum"
+	got := m.visibleDistributions()
+	if len(got) != 2 {
+		t.Fatalf("got %d families, want the folded histogram and the summary: %v", len(got), got)
+	}
+
+	var names []string
+	for _, entry := range got {
+		names = append(names, entry.dist.Name)
+	}
+	sort.Strings(names)
+	if !reflect.DeepEqual(names, []string{"rpc_seconds", "sum(lat_seconds)"}) {
+		t.Errorf("names = %v, want the summary untouched beside the folded histogram", names)
+	}
+
+	header := plain(strings.SplitN(mustRender(t, m), "\n", 2)[0])
+	if !strings.Contains(header, "summaries not summed") {
+		t.Errorf("header does not say the summary was left alone:\n%s", header)
+	}
+}
+
+// Bucket layouts that differ are unioned, so a bound only one member reports
+// still gets a row rather than taking the whole family down with it.
+func TestFoldedBucketLayoutsAreUnioned(t *testing.T) {
+	const disjoint = `# TYPE lat_seconds histogram
+lat_seconds_bucket{pod="a",le="1"} 2
+lat_seconds_bucket{pod="a",le="+Inf"} 4
+lat_seconds_count{pod="a"} 4
+lat_seconds_bucket{pod="b",le="2"} 6
+lat_seconds_bucket{pod="b",le="+Inf"} 10
+lat_seconds_count{pod="b"} 10
+`
+	got := aggregatedDists(t, "sum", disjoint)
+	if len(got) != 1 {
+		t.Fatalf("got %d families, want one: %v", len(got), got)
+	}
+
+	// Each of the two odd bounds is summed over the one member that carries it,
+	// and +Inf over both. The order is ascending with +Inf last.
+	var bounds []string
+	for _, point := range got[0].dist.Points {
+		bounds = append(bounds, formatBound(point.Bound))
+	}
+	if !reflect.DeepEqual(bounds, []string{"1", "2", "+Inf"}) {
+		t.Errorf("bounds = %v, want 1, 2, +Inf", bounds)
+	}
+	want := map[string]float64{"1": 2, "2": 6, "+Inf": 14}
+	if buckets := bucketValues(got[0].dist); !reflect.DeepEqual(buckets, want) {
+		t.Errorf("buckets = %v, want %v", buckets, want)
+	}
+}
+
+// A target first scraped mid-run has a shorter history, and its newest value is
+// still this scrape. Folding has to line the members up at that end, or the new
+// pod's counts would be added to the wrong columns.
+func TestFoldedDistributionAlignsHistoryFromTheNewestEnd(t *testing.T) {
+	const first = `# TYPE lat_seconds histogram
+lat_seconds_bucket{pod="a",le="+Inf"} 4
+lat_seconds_count{pod="a"} 4
+`
+	got := aggregatedDists(t, "sum", first, perPodLatency)
+	if len(got) != 1 {
+		t.Fatalf("got %d families, want one: %v", len(got), got)
+	}
+	dist := got[0].dist
+	total := distScrapeCount(dist)
+	if total != 2 {
+		t.Fatalf("folded family spans %d scrapes, want 2", total)
+	}
+	// The older column holds pod a alone; the newer holds both.
+	inf := dist.findPoint(math.Inf(+1))
+	if inf == nil {
+		t.Fatalf("folded family has no +Inf bucket: %v", dist.Points)
+	}
+	if got := valueAt(inf, 0, total); got != 4 {
+		t.Errorf("older +Inf = %v, want pod a alone", got)
+	}
+	if got := valueAt(inf, 1, total); got != 14 {
+		t.Errorf("newest +Inf = %v, want 14", got)
+	}
+	// pod b's le=1 bucket was not reported at the older scrape, which reads as a
+	// gap rather than as a count of zero.
+	if got := valueAt(dist.Points[0].Series, 0, total); !math.IsNaN(got) {
+		t.Errorf("older le=1 = %v, want a gap: no member reported that bound yet", got)
+	}
+}
+
+// hide-static has to judge the folded family, not its members: a quiet target
+// folded in with a busy one belongs in the total, and dropping it first would
+// both understate the total and be a different list from the metrics view's.
+func TestHideStaticJudgesTheFoldedDistribution(t *testing.T) {
+	const moved = `# TYPE lat_seconds histogram
+lat_seconds_bucket{pod="a",le="1"} 2
+lat_seconds_bucket{pod="a",le="+Inf"} 4
+lat_seconds_sum{pod="a"} 3
+lat_seconds_count{pod="a"} 4
+lat_seconds_bucket{pod="b",le="1"} 6
+lat_seconds_bucket{pod="b",le="+Inf"} 11
+lat_seconds_sum{pod="b"} 8
+lat_seconds_count{pod="b"} 11
+`
+	m := distModel(t, 120, perPodLatency, moved)
+	m.cfg.HideStatic = true
+	if got := len(m.visibleDistributions()); got != 1 {
+		t.Fatalf("got %d families, want only the pod that moved", got)
+	}
+
+	m.cfg.Aggregation = "sum"
+	got := m.visibleDistributions()
+	if len(got) != 1 {
+		t.Fatalf("the folded family moves 14 -> 15 and should have survived: %v", got)
+	}
+	if buckets := bucketValues(got[0].dist); buckets["+Inf"] != 15 {
+		t.Errorf("+Inf = %v, want the quiet pod counted too", buckets["+Inf"])
+	}
+}
+
+// The accordion keys on the group, so the two members that now share a row share
+// its expansion state rather than each claiming one the row can never read back.
+func TestFoldedFamilyExpandsAsOneRow(t *testing.T) {
+	m := distModel(t, 120, perPodLatency)
+	m.cfg.Aggregation = "sum"
+	m.bucketMode = BucketModeCumulative
+	m.refresh()
+
+	m.expandStep()
+	rows := distRows(t, m)
+	if len(rows) < 4 {
+		t.Fatalf("got %d lines, want the family line and its grid:\n%v", len(rows), rows)
+	}
+	if !strings.HasPrefix(plain(rows[0]), "▾") {
+		t.Errorf("family line = %q, want the expanded marker", plain(rows[0]))
+	}
+	// le, then the two folded bounds.
+	if !strings.Contains(plain(rows[2]), "8") || !strings.Contains(plain(rows[3]), "14") {
+		t.Errorf("grid does not hold the folded counts:\n%v", rows[1:4])
+	}
+}
+
+// mustRender returns the rendered distribution view.
+func mustRender(t *testing.T, m model) string {
+	t.Helper()
+	content, _ := m.renderDistributions()
+	return content
 }

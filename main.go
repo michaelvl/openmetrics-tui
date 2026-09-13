@@ -653,6 +653,7 @@ Help
   m           Edit the metric-name filter
   f           Edit the label filter (k=v,k!=v,k=~re - all must match)
   a           Edit the aggregation (labels to group by, e.g. pod or avg pod)
+              Histograms fold with sum only; summaries never fold
   enter/esc   Apply / discard a header edit
   tab         Move to the next header field
   b           Cycle bucket values (distribution view)
@@ -1018,7 +1019,7 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.FilterLabel, "filter-label", "", "Label filter: comma-separated clauses that must all match, each key=value, key!=value, key=~regex, key!~regex, or a bare regex tried against every label value (e.g. 'env=prod,region!=eu')")
 	flag.StringVar(&cfg.DeltaMode, "delta-mode", DeltaModeOff, "Delta mode: off, next, view")
 	flag.BoolVar(&cfg.HideStatic, "hide-static", false, "Hide metrics whose recent values never change")
-	flag.StringVar(&cfg.Aggregation, "aggregation", "", "Combine series that differ only in other labels: a comma-separated label list, optionally preceded by sum, avg, min, max or count (e.g. 'pod', 'avg pod,instance', 'count')")
+	flag.StringVar(&cfg.Aggregation, "aggregation", "", "Combine series that differ only in other labels: a comma-separated label list, optionally preceded by sum, avg, min, max or count (e.g. 'pod', 'avg pod,instance', 'count'). Histograms fold with sum only; summaries never fold")
 
 	flag.Parse()
 

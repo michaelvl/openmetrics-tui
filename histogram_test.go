@@ -173,24 +173,38 @@ lat_seconds_count 120
 	wantPerBucket := [][]float64{{20, 25}, {40, 45}, {30, 35}, {10, 15}}
 	assertRows(t, "per-bucket", perBucket, wantPerBucket)
 
-	// Every band gained 5 observations between the two scrapes.
-	delta := bucketDisplayValues(dist, BucketModePerBucketDelta, DeltaModeOff)
-	nan := math.NaN()
-	wantDelta := [][]float64{{nan, 5}, {nan, 5}, {nan, 5}, {nan, 5}}
-	assertRows(t, "per-bucket delta", delta, wantDelta)
+	// Every band gained 5 observations between the two scrapes. The delta mode
+	// puts that 5 in the column it was earned from and leaves the newest column
+	// absolute, exactly as it does for a scalar metric.
+	perBucketDelta := bucketDisplayValues(dist, BucketModePerBucket, DeltaModeNext)
+	wantPerBucketDelta := [][]float64{{5, 25}, {5, 45}, {5, 35}, {5, 15}}
+	assertRows(t, "per-bucket with deltas", perBucketDelta, wantPerBucketDelta)
+
+	// The same time transform over the bounds the exporter published.
+	cumulativeDelta := bucketDisplayValues(dist, BucketModeCumulative, DeltaModeNext)
+	wantCumulativeDelta := [][]float64{{5, 25}, {10, 70}, {15, 105}, {20, 120}}
+	assertRows(t, "cumulative with deltas", cumulativeDelta, wantCumulativeDelta)
 }
 
-// The per-bucket delta mode carries its own time transform, so the d key must not
-// be applied on top of it.
-func TestPerBucketDeltaIgnoresDeltaMode(t *testing.T) {
+// The bucket mode collapses a scrape down its bounds and the delta mode walks a
+// row across time. They are independent axes, so the delta mode has to reach the
+// grid whichever bucket mode is showing - it used to be discarded in one of them.
+func TestDeltaModeAppliesInEveryBucketMode(t *testing.T) {
 	const second = `# TYPE lat_seconds histogram
 lat_seconds_bucket{le="0.1"} 25
-lat_seconds_bucket{le="+Inf"} 40
+lat_seconds_bucket{le="0.5"} 70
+lat_seconds_bucket{le="1"} 105
+lat_seconds_bucket{le="+Inf"} 140
 `
 	dist := distFromText(t, `lat_seconds{}`, latencyFixture, second)
-	off := bucketDisplayValues(dist, BucketModePerBucketDelta, DeltaModeOff)
-	on := bucketDisplayValues(dist, BucketModePerBucketDelta, DeltaModeView)
-	assertRows(t, "per-bucket delta with d active", on, off)
+	for _, mode := range []BucketMode{BucketModeCumulative, BucketModePerBucket} {
+		off := bucketDisplayValues(dist, mode, DeltaModeOff)
+		on := bucketDisplayValues(dist, mode, DeltaModeNext)
+		if off[0][0] == on[0][0] {
+			t.Errorf("%v: the oldest column is %v with and without deltas, want the delta mode to reach it",
+				mode, off[0][0])
+		}
+	}
 }
 
 func TestCounterResetIsNotRenderedAsANegativeDelta(t *testing.T) {
@@ -202,9 +216,12 @@ lat_seconds_bucket{le="+Inf"} 15
 lat_seconds_count 15
 `
 	dist := distFromText(t, `lat_seconds{}`, latencyFixture, restarted)
-	rows := bucketDisplayValues(dist, BucketModePerBucketDelta, DeltaModeOff)
+	// The delta belongs to the column it was earned from, which is the one before
+	// the restart. Bucket counts are counters, so the drop is blanked rather than
+	// rendered as a large negative number.
+	rows := bucketDisplayValues(dist, BucketModePerBucket, DeltaModeNext)
 	for i, row := range rows {
-		if got := row[len(row)-1]; !math.IsNaN(got) {
+		if got := row[len(row)-2]; !math.IsNaN(got) {
 			t.Errorf("bucket %d delta across a reset = %v, want no value", i, got)
 		}
 	}

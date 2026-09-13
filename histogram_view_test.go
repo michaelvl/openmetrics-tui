@@ -51,7 +51,7 @@ func distModel(t *testing.T, width int, texts ...string) model {
 		width:         width,
 		height:        24,
 		view:          ViewDistributions,
-		bucketMode:    BucketModePerBucketDelta,
+		bucketMode:    BucketModePerBucket,
 		expanded:      make(map[string]bool),
 		viewport:      viewport.New(width, 20),
 		viewportReady: true,
@@ -268,17 +268,17 @@ lat_seconds_count{handler="/api/v1/products/search/suggestions",method="GET"} 4
 }
 
 func TestBucketModeCyclesBackToWhereItStarted(t *testing.T) {
-	mode := BucketModePerBucketDelta
+	mode := BucketModePerBucket
 	seen := map[BucketMode]bool{}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 2; i++ {
 		seen[mode] = true
 		mode = mode.next()
 	}
-	if len(seen) != 3 {
-		t.Errorf("cycling visited %d modes, want all 3", len(seen))
+	if len(seen) != 2 {
+		t.Errorf("cycling visited %d modes, want both", len(seen))
 	}
-	if mode != BucketModePerBucketDelta {
-		t.Errorf("three steps landed on %v, want to be back at the start", mode)
+	if mode != BucketModePerBucket {
+		t.Errorf("two steps landed on %v, want to be back at the start", mode)
 	}
 }
 

@@ -584,8 +584,9 @@ func (s *MetricsState) Write(w http.ResponseWriter) {
 
 // latencyHandlers each get a differently shaped latency distribution. A single
 // quantile cannot tell them apart - /slow and /bimodal can share a p50 - but a
-// bucket grid shows /fast piled into the low buckets, /slow into the high ones,
-// and /bimodal split into two bands with an empty gap between them.
+// bucket grid shows /fast centred in the low buckets, /slow centred in the high
+// ones, and /bimodal split into two bands with an empty gap between them. All
+// three are right-skewed, the way a latency distribution is.
 var latencyHandlers = []string{"/bimodal", "/fast", "/slow"}
 
 // latencyBounds and sizeBounds deliberately share nothing. Bucket bounds are per
@@ -596,27 +597,40 @@ var (
 	sizeBounds    = []float64{64, 512, 4096, 65536}
 )
 
+// logNormal draws from a log-normal distribution with the given median and
+// shape. A uniform range would fill its buckets flat, which no real latency does:
+// service time is a product of many small delays rather than a sum of them, so
+// it piles up around a typical value and trails off to the right, the far end of
+// the tail being the retries and the slow queries. sigma is the spread in log
+// space - 0.4 is a tight distribution, 0.8 a broad one - and the tail is
+// unbounded, so an occasional sample lands well beyond the last bucket the way a
+// real outlier does.
+func logNormal(median, sigma float64) float64 {
+	return median * math.Exp(sigma*rand.NormFloat64())
+}
+
 func sampleLatency(handler string) float64 {
 	switch handler {
 	case "/fast":
-		return rand.Float64() * 0.15
+		return logNormal(0.06, 0.55)
 	case "/slow":
-		return 0.3 + rand.Float64()*0.9
+		return logNormal(0.5, 0.45)
 	default:
-		// Bimodal: a cache hit or a cache miss, with nothing in between.
+		// Bimodal: a cache hit or a cache miss, each its own centred distribution,
+		// with a gap between them that no single quantile can describe.
 		if rand.Float64() < 0.7 {
-			return rand.Float64() * 0.08
+			return logNormal(0.03, 0.45)
 		}
-		return 0.6 + rand.Float64()*0.5
+		return logNormal(0.7, 0.4)
 	}
 }
 
 func sampleResponseSize() float64 {
 	// Mostly small JSON bodies, with the occasional large listing.
 	if rand.Float64() < 0.85 {
-		return 200 + rand.Float64()*3000
+		return logNormal(1200, 0.8)
 	}
-	return 10000 + rand.Float64()*120000
+	return logNormal(45000, 0.5)
 }
 
 func observeLatency(buckets []float64, duration float64) {

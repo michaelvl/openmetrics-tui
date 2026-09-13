@@ -146,9 +146,10 @@ func main() {
 		currentValueStyle: currentValueStyle,
 		deltaValueStyle:   deltaValueStyle,
 		cursorStyle:       cursorStyle,
-		// Raw cumulative counters are the least readable of the three bucket
-		// modes, so open on the most readable one.
-		bucketMode: BucketModePerBucketDelta,
+		// Cumulative counts are the exporter's layout rather than a useful
+		// reading, so open on the decumulated one. Turning those lifetime totals
+		// into a rate is the delta mode's job, one d away.
+		bucketMode: BucketModePerBucket,
 		expanded:   make(map[string]bool),
 		input:      input,
 	}
@@ -544,6 +545,16 @@ func (m model) View() string {
 	}
 	viewStatus := lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Render("v: " + viewName)
 
+	// Build the bucket-mode status. It rides beside the delta mode because the
+	// two are the display's two axes - this one within a scrape, that one across
+	// time - and reading them together is the only way to know what a cell holds.
+	// It appears only in the distribution view, where b is live and the setting
+	// means something, which also keeps the footer short everywhere else.
+	var bucketStatus string
+	if m.view == ViewDistributions {
+		bucketStatus = " | Buckets: " + m.bucketMode.String()
+	}
+
 	// Build hide-static status
 	var hideStaticStatus string
 	if m.cfg.HideStatic {
@@ -580,6 +591,7 @@ func (m model) View() string {
 		fixedWidth += lipgloss.Width(" |  | Deltas: ") +
 			lipgloss.Width(viewStatus) +
 			lipgloss.Width(deltasStatus) +
+			lipgloss.Width(bucketStatus) +
 			lipgloss.Width(pauseStatus) +
 			lipgloss.Width(hideStaticStatus)
 	}
@@ -597,6 +609,16 @@ func (m model) View() string {
 	// worse than a short URL.
 	maxMessageLength := max(m.width-fixedWidth-lipgloss.Width(leftSegment)-safetyMargin, 0)
 
+	// On a narrow terminal the fixed segments crowd the endpoint out entirely,
+	// and truncateMessage will not shrink it below an ellipsis - so the line
+	// grows past the right edge instead, costing a row of the grid. The bucket
+	// mode is the segment that gives way: it is static information, still a
+	// glance away in the help overlay, whereas a connection error is news.
+	if bucketStatus != "" && maxMessageLength < minStatusWidth {
+		maxMessageLength += lipgloss.Width(bucketStatus)
+		bucketStatus = ""
+	}
+
 	// Build status indicator with dynamic truncation
 	var statusIndicator string
 	if m.isConnected {
@@ -613,8 +635,8 @@ func (m model) View() string {
 		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● ") + url
 	}
 
-	footer := fmt.Sprintf("%s | %s | Deltas: %s%s%s | %s%s",
-		leftSegment, viewStatus, deltasStatus, pauseStatus, hideStaticStatus, statusIndicator, scrollHints)
+	footer := fmt.Sprintf("%s | %s | Deltas: %s%s%s%s | %s%s",
+		leftSegment, viewStatus, deltasStatus, bucketStatus, pauseStatus, hideStaticStatus, statusIndicator, scrollHints)
 	if editing {
 		footer = fmt.Sprintf("%s | %s%s", leftSegment, statusIndicator, scrollHints)
 	}
@@ -646,7 +668,7 @@ Help
   q/ctrl+c    Quit
   ?           Toggle this help
   l           Cycle label display mode
-  d           Cycle delta mode (off/next/view)
+  d           Cycle delta mode: raw values -> deltas across time (off/next/view)
   p           Pause/unpause updates
   s           Toggle hiding static (unchanging) metrics
   v           Switch between metrics and distributions
@@ -656,7 +678,8 @@ Help
               Histograms fold with sum only; summaries never fold
   enter/esc   Apply / discard a header edit
   tab         Move to the next header field
-  b           Cycle bucket values (distribution view)
+  b           Cycle bucket mode: cumulative <-> per bucket, within one
+              scrape (distribution view). Independent of the delta mode
   enter       Expand a distribution, then zoom it full screen
   esc         Step back down: zoomed -> expanded -> collapsed
   ↑/↓         Scroll, or move the cursor in the distribution view

@@ -5,23 +5,24 @@ import (
 	"time"
 )
 
-// BucketMode selects how a histogram's bucket counts are presented.
+// BucketMode selects how a histogram's bucket counts are presented across the
+// bounds of a single scrape. It is one of the display's two independent axes:
+// this one runs down the column, from the lowest bound to +Inf, while the delta
+// mode runs along the row, across time. Neither one knows about the other, so
+// any pairing of the two means what both names say it means.
 //
-// Buckets arrive cumulative ("le=0.1" includes everything in "le=0.05") and as
-// counters that climb for the process's whole lifetime, which makes the raw
-// numbers nearly unreadable. The other two modes undo one layer each.
+// Buckets arrive cumulative ("le=0.1" includes everything in "le=0.05"), which
+// is the exporter's own layout rather than anything this tool computes. The
+// second mode undoes it.
 type BucketMode int
 
 const (
-	// BucketModeCumulative shows the counters exactly as scraped.
+	// BucketModeCumulative shows the counts exactly as scraped.
 	BucketModeCumulative BucketMode = iota
 	// BucketModePerBucket subtracts each bucket from the one below it, so a row
-	// counts only the observations that fell in that band.
+	// counts only the observations that fell in that band. The counts are still
+	// lifetime totals; turning those into a rate is the delta mode's job.
 	BucketModePerBucket
-	// BucketModePerBucketDelta additionally subtracts the previous scrape, so a
-	// row counts the observations that arrived in that band since the last poll.
-	// This is the mode the view opens on.
-	BucketModePerBucketDelta
 )
 
 func (b BucketMode) String() string {
@@ -30,22 +31,16 @@ func (b BucketMode) String() string {
 		return "Cumulative"
 	case BucketModePerBucket:
 		return "Per bucket"
-	case BucketModePerBucketDelta:
-		return "Per bucket Δ"
 	}
 	return "unknown"
 }
 
-// next cycles cumulative -> per-bucket -> per-bucket delta -> cumulative.
+// next toggles cumulative <-> per-bucket.
 func (b BucketMode) next() BucketMode {
-	switch b {
-	case BucketModeCumulative:
+	if b == BucketModeCumulative {
 		return BucketModePerBucket
-	case BucketModePerBucket:
-		return BucketModePerBucketDelta
-	default:
-		return BucketModeCumulative
 	}
+	return BucketModeCumulative
 }
 
 // displayQuantiles are the quantiles shown on a collapsed distribution line, and
@@ -103,11 +98,11 @@ func valueAt(series *MetricSeries, idx, total int) float64 {
 // bucketDisplayValues returns one value row per bucket or quantile, in Points
 // order, every row padded to the family's full scrape count.
 //
-// The two available transforms compose in a fixed order: decumulation across
-// bounds first, then the time transform. BucketModePerBucketDelta already
-// carries a per-scrape delta, so deltaMode is ignored in that mode rather than
-// applied twice. Summary quantiles are latencies rather than cumulative counts,
-// so decumulating them would be meaningless and is skipped.
+// The display's two axes compose here, in a fixed order and without consulting
+// each other: the bucket mode collapses each scrape down its bounds, then the
+// delta mode walks each row across time. Summary quantiles are latencies rather
+// than cumulative counts, so decumulating them would be meaningless and the
+// bucket mode passes them through untouched; the delta mode still applies.
 func bucketDisplayValues(dist *DistributionSeries, mode BucketMode, deltaMode string) [][]float64 {
 	total := distScrapeCount(dist)
 	rows := make([][]float64, len(dist.Points))
@@ -119,25 +114,23 @@ func bucketDisplayValues(dist *DistributionSeries, mode BucketMode, deltaMode st
 		rows[i] = row
 	}
 
-	decumulate := dist.Kind == KindHistogram && mode != BucketModeCumulative
-	if decumulate {
+	if dist.Kind == KindHistogram && mode == BucketModePerBucket {
 		for idx := 0; idx < total; idx++ {
 			decumulateScrape(rows, idx)
 		}
 	}
 
-	if mode == BucketModePerBucketDelta && decumulate {
-		for i, row := range rows {
-			rows[i] = perScrapeDelta(row)
-		}
-		return rows
-	}
-
 	if deltaMode != DeltaModeOff {
 		// Borrow the simple-metric time transform rather than reimplementing its
-		// three modes and their NaN handling.
-		for i, row := range rows {
-			rows[i] = (&MetricSeries{Values: row}).ValuesWithDeltas(deltaMode)
+		// modes and their NaN handling. The kind travels with the row so that a
+		// bucket's counter reset is blanked and a summary's falling quantile is
+		// not.
+		for i, point := range dist.Points {
+			kind := KindCounter
+			if point.Series != nil {
+				kind = point.Series.Kind
+			}
+			rows[i] = (&MetricSeries{Kind: kind, Values: rows[i]}).ValuesWithDeltas(deltaMode)
 		}
 	}
 	return rows
@@ -165,21 +158,6 @@ func decumulateScrape(rows [][]float64, idx int) {
 		}
 		rows[i][idx] = band
 	}
-}
-
-// perScrapeDelta converts a row of counter values into what arrived since the
-// previous scrape. The oldest scrape has nothing to compare against, and a
-// counter reset is reported as missing rather than as a large negative number.
-func perScrapeDelta(row []float64) []float64 {
-	res := make([]float64, len(row))
-	for i := range row {
-		if i == 0 || math.IsNaN(row[i]) || math.IsNaN(row[i-1]) || row[i] < row[i-1] {
-			res[i] = math.NaN()
-			continue
-		}
-		res[i] = row[i] - row[i-1]
-	}
-	return res
 }
 
 // quantileCell is one estimated or reported quantile.

@@ -186,7 +186,7 @@ func (m model) renderZoom(entry distEntry) string {
 	grid := m.layOutGrid([]*distBlock{block}, 0)
 
 	title := lipgloss.NewStyle().Bold(true).Render(entry.dist.Name + m.formatDistLabels(entry.dist))
-	hint := faintStyle.Render(fmt.Sprintf("Buckets: %s (b) | esc: back", m.bucketMode))
+	hint := faintStyle.Render("esc: back")
 
 	lines := []string{title + "  " + hint, m.zoomStats(entry.dist), ""}
 	lines = append(lines, m.renderBlock(block, "", grid)...)
@@ -421,14 +421,14 @@ func (m model) historyColumns() int {
 	return m.cfg.History
 }
 
-// distributionHeader is the view's own title line. It carries the bucket mode
-// because that setting only means anything here, and the footer is already full.
-// It also carries whatever the aggregation field did not do here, which is the
-// one thing about this view the rows cannot show by themselves.
+// distributionHeader is the view's own title line. The bucket mode used to live
+// here, back when it was a third thing the footer knew nothing about; it now
+// sits beside the delta mode in the footer, where the two axes can be read
+// together. What stays is whatever the aggregation field did not do here, which
+// is the one thing about this view the rows cannot show by themselves.
 func (m model) distributionHeader(entries []distEntry) string {
 	title := lipgloss.NewStyle().Bold(true).Render("DISTRIBUTIONS")
-	text := fmt.Sprintf("%d shown | Buckets: %s (b) | enter/esc: expand",
-		len(entries), m.bucketMode)
+	text := fmt.Sprintf("%d shown | enter/esc: expand", len(entries))
 	if note := m.distAggNote(entries); note != "" {
 		text += " | " + note
 	}

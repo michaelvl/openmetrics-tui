@@ -263,6 +263,52 @@ func TestFormatBound(t *testing.T) {
 	}
 }
 
+// ValuesWithDeltas is the display's time axis, shared by the metrics table and
+// by every histogram bucket row, so its three modes are pinned here rather than
+// only through whichever view happens to call it.
+func TestValuesWithDeltasTransformsEachMode(t *testing.T) {
+	nan := math.NaN()
+	cases := []struct {
+		name   string
+		kind   MetricKind
+		values []float64
+		mode   string
+		want   []float64
+	}{
+		{"off returns the values untouched", KindCounter, []float64{10, 14, 20}, DeltaModeOff, []float64{10, 14, 20}},
+		// The delta sits in the column it was earned from, and the newest column
+		// stays absolute - that is what makes "next" readable beside a raw table.
+		{"next is a forward difference", KindCounter, []float64{10, 14, 20}, DeltaModeNext, []float64{4, 6, 20}},
+		// "view" agrees with "next" on the history and spends the newest column on
+		// the growth across everything else on screen.
+		{"view spans the history", KindCounter, []float64{10, 14, 20}, DeltaModeView, []float64{4, 6, 4}},
+		{"view needs two historical samples", KindCounter, []float64{10, 20}, DeltaModeView, []float64{10, nan}},
+		{"a gap blanks the deltas that touch it", KindCounter, []float64{10, nan, 20}, DeltaModeNext, []float64{nan, nan, 20}},
+		// A counter only falls when the process restarted, so the drop is not a
+		// measurement and must not be rendered as one.
+		{"a counter reset is blanked", KindCounter, []float64{100, 5, 9}, DeltaModeNext, []float64{nan, 4, 9}},
+		{"a reset inside the window blanks the view span", KindCounter, []float64{100, 5, 9}, DeltaModeView, []float64{nan, 4, nan}},
+		// A gauge is free to fall; blanking that would hide the measurement.
+		{"a falling gauge keeps its negative delta", KindGauge, []float64{100, 5, 9}, DeltaModeNext, []float64{-95, 4, 9}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := (&MetricSeries{Kind: tc.kind, Values: tc.values}).ValuesWithDeltas(tc.mode)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if math.IsNaN(got[i]) && math.IsNaN(tc.want[i]) {
+					continue
+				}
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func keysOf[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

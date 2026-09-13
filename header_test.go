@@ -54,7 +54,7 @@ func headerModel(t *testing.T, width int, texts ...string) model {
 		width:         width,
 		height:        24,
 		view:          ViewMetrics,
-		bucketMode:    BucketModePerBucketDelta,
+		bucketMode:    BucketModePerBucket,
 		expanded:      make(map[string]bool),
 		viewport:      viewport.New(width, 20),
 		viewportReady: true,
@@ -469,6 +469,35 @@ func TestFooterFitsTheTerminalWhileEditing(t *testing.T) {
 		check("error", m)
 		if !strings.Contains(plain(m.View()), "missing closing )") {
 			t.Errorf("width %d: the error was truncated away:\n%s", width, plain(m.View()))
+		}
+	}
+}
+
+// The distribution view's footer carries one segment more than the metrics
+// view's, and a wrapped footer costs a row of the grid. Its own floor is higher
+// than the metrics view's because "v: Distributions" is the longer label, so the
+// widths here start where that label already fits; what this pins is that the
+// bucket indicator gives way rather than pushing the line over the edge.
+func TestDistributionFooterFitsTheTerminal(t *testing.T) {
+	withColor(t)
+	const longURL = "http://metrics.internal.example.com:9090/federate/exporters/node"
+	for _, width := range []int{120, 100, 80, 70} {
+		m := distModel(t, width, threeFamilies)
+		m.cfg.URL = longURL
+		m.isConnected = true
+		next, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		m = next.(model)
+		m.view = ViewDistributions
+		m.refresh()
+
+		out := m.View()
+		if got := lipgloss.Width(out); got > width {
+			t.Errorf("width %d: view is %d columns:\n%s", width, got, plain(out))
+		}
+		// Where there is room, the two axes have to be readable together - that is
+		// the whole point of moving the bucket mode down beside the delta mode.
+		if width >= 100 && !strings.Contains(plain(out), "Buckets: Per bucket") {
+			t.Errorf("width %d: the footer lost the bucket mode:\n%s", width, plain(out))
 		}
 	}
 }

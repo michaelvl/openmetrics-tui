@@ -288,6 +288,10 @@ const minHintWidth = 12
 // is open the user is reading the hint, not the endpoint.
 const statusReserveWhileEdit = 12
 
+// minStatusWidth is the room the footer insists on leaving for the endpoint or
+// the connection error before it starts dropping mode indicators.
+const minStatusWidth = 12
+
 // headerHint is the footer's left-hand segment while a box is being edited. It
 // carries the validation error when there is one, because the header itself is
 // a fixed height with no room for it. width is what the rest of the footer can

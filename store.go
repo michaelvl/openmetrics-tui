@@ -51,6 +51,11 @@ type MetricSeries struct {
 // - "off": Returns raw absolute values
 // - "next": Historical values are deltas to next value (val[i+1] - val[i]), current is absolute
 // - "view": All values are deltas; historical same as "next", current is (last_historical - first_historical)
+//
+// A counter that goes backwards has been reset, and the drop is an artefact of
+// the restart rather than something that was measured, so it is reported as
+// missing rather than as a large negative number. A gauge is free to fall -
+// that is what a gauge is for - so the guard is keyed on the series kind.
 func (s *MetricSeries) ValuesWithDeltas(mode string) []float64 {
 	if mode == "off" {
 		return s.Values
@@ -68,7 +73,7 @@ func (s *MetricSeries) ValuesWithDeltas(mode string) []float64 {
 	for i := 0; i < lastIdx; i++ {
 		curr := s.Values[i]
 		next := s.Values[i+1]
-		if math.IsNaN(curr) || math.IsNaN(next) {
+		if math.IsNaN(curr) || math.IsNaN(next) || s.isReset(curr, next) {
 			res[i] = math.NaN()
 		} else {
 			res[i] = next - curr
@@ -91,10 +96,12 @@ func (s *MetricSeries) ValuesWithDeltas(mode string) []float64 {
 			}
 		}
 
-		if firstHistIdx != -1 && lastHistIdx != -1 && firstHistIdx != lastHistIdx {
+		if firstHistIdx != -1 && lastHistIdx != -1 && firstHistIdx != lastHistIdx &&
+			!s.isReset(s.Values[firstHistIdx], s.Values[lastHistIdx]) {
 			res[lastIdx] = s.Values[lastHistIdx] - s.Values[firstHistIdx]
 		} else {
-			// Not enough historical data for a view delta
+			// Not enough historical data for a view delta, or a reset inside the
+			// window that would make the span meaningless.
 			res[lastIdx] = math.NaN()
 		}
 	} else {
@@ -103,6 +110,13 @@ func (s *MetricSeries) ValuesWithDeltas(mode string) []float64 {
 	}
 
 	return res
+}
+
+// isReset reports whether the series fell between two samples in a way that can
+// only mean the exporting process restarted. Only counters qualify; a falling
+// gauge is an ordinary measurement.
+func (s *MetricSeries) isReset(from, to float64) bool {
+	return s.Kind == KindCounter && to < from
 }
 
 // IsStatic reports whether all retained non-NaN values are equal.

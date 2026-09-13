@@ -403,6 +403,16 @@ func TestMatchesFiltersAppliesTheSameRulesToBothViews(t *testing.T) {
 		{"bare regex matches any value", "", "^/api$", "lat_seconds", true},
 		{"bare regex matching nothing rejects", "", "^/nope$", "lat_seconds", false},
 		{"both filters must pass", "^lat_", "env=dev", "lat_seconds", false},
+		{"every clause must pass", "", "env=prod,handler=/api", "lat_seconds", true},
+		{"one failing clause rejects", "", "env=prod,handler=/ui", "lat_seconds", false},
+		{"a negated clause holds", "", "env=prod,handler!=/ui", "lat_seconds", true},
+		{"a negated clause rejects", "", "env!=prod", "lat_seconds", false},
+		{"a negated regex", "", "handler!~^/ui,env=~pro", "lat_seconds", true},
+		{"an absent label satisfies a negation", "", "zone!=eu", "lat_seconds", true},
+		{"an absent label fails a positive clause", "", "zone=eu,env=prod", "lat_seconds", false},
+		{"a keyed and a bare clause", "", "env=prod,^/api$", "lat_seconds", true},
+		{"a comma inside a repetition is not a separator", "", "env=~pro{1,2}d", "lat_seconds", true},
+		{"the metric filter still applies alongside clauses", "^rpc_", "env=prod,handler=/api", "lat_seconds", false},
 	}
 	for _, tc := range cases {
 		m := model{cfg: Config{FilterMetric: tc.metric, FilterLabel: tc.label}}

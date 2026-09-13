@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/cursor"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -42,6 +43,7 @@ type Config struct {
 	FilterLabel  string
 	DeltaMode    string
 	HideStatic   bool
+	Aggregation  string
 }
 
 type model struct {
@@ -79,6 +81,15 @@ type model struct {
 	distCursorSpan cursorSpan
 	expanded       map[string]bool
 	zoomed         string
+
+	// editing names the header box that currently owns the keyboard, and input
+	// is the one text field shared by all three boxes - only one can be focused
+	// at a time, so a field per box would be three copies of the same state.
+	// inputErr holds the reason the last commit was refused, which keeps the
+	// user in the box instead of applying a pattern that matches nothing.
+	editing  headerField
+	input    textinput.Model
+	inputErr string
 }
 
 type tickMsg time.Time
@@ -92,13 +103,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Validate regex
-	if _, err := regexp.Compile(cfg.FilterMetric); err != nil {
-		fmt.Printf("Error: invalid metric filter regex: %v\n", err)
+	// The same validation the header boxes apply to an edited filter, so that a
+	// flag and a keystroke cannot disagree about what is a usable filter.
+	if err := validateMetricFilter(cfg.FilterMetric); err != nil {
+		fmt.Printf("Error: invalid metric filter: %v\n", err)
 		os.Exit(1)
 	}
-	if _, err := regexp.Compile(cfg.FilterLabel); err != nil {
-		fmt.Printf("Error: invalid label filter regex: %v\n", err)
+	if err := validateLabelFilter(cfg.FilterLabel); err != nil {
+		fmt.Printf("Error: invalid label filter: %v\n", err)
+		os.Exit(1)
+	}
+	if err := validateAggregation(cfg.Aggregation); err != nil {
+		fmt.Printf("Error: invalid aggregation: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -110,6 +126,14 @@ func main() {
 	currentValueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213")) // brighter magenta
 	deltaValueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("208"))   // orange
 	cursorStyle := lipgloss.NewStyle().Background(lipgloss.Color("238"))
+
+	// A static cursor keeps the header boxes out of the message loop: a blinking
+	// one would need cursor.BlinkMsg plumbed through Update alongside the tick
+	// and fetch messages, for no gain in a bar that is only ever briefly focused.
+	input := textinput.New()
+	input.Prompt = ""
+	input.CharLimit = 256
+	input.Cursor.SetMode(cursor.CursorStatic)
 
 	m := model{
 		cfg:               cfg,
@@ -126,6 +150,7 @@ func main() {
 		// modes, so open on the most readable one.
 		bucketMode: BucketModePerBucketDelta,
 		expanded:   make(map[string]bool),
+		input:      input,
 	}
 
 	if _, err := tea.NewProgram(m).Run(); err != nil {
@@ -146,6 +171,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// A focused header box swallows the keyboard, so that typing a filter
+		// cannot trip over the single-letter global keys - q would otherwise quit
+		// halfway through a metric name.
+		if m.editing != fieldNone {
+			switch msg.String() {
+			case "enter":
+				m.commitEditing()
+				return m, nil
+			case "esc":
+				m.cancelEditing()
+				return m, nil
+			case "tab":
+				return m, m.moveField(1)
+			case "shift+tab":
+				return m, m.moveField(-1)
+			case "ctrl+c":
+				return m, tea.Quit
+			}
+			// A new keystroke means the user is fixing what the last commit
+			// refused, so the complaint goes away until they try again.
+			m.inputErr = ""
+			m.input, cmd = m.input.Update(msg)
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -153,9 +203,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = !m.showHelp
 			return m, nil
 		case "l":
-			// Cycle through label modes
-			// If FilterLabel is empty, skip the "hide-filtered" mode
-			if m.cfg.FilterLabel == "" {
+			// Cycle through label modes. The "hide-filtered" mode is only offered
+			// when the filter pins a label value down - a bare-regex filter names
+			// no label, so the mode would hide nothing.
+			if len(getFilteredLabelKeys(m.cfg.FilterLabel)) == 0 {
 				// Simple toggle: all <-> hide-all
 				if m.cfg.LabelMode == LabelModeShowAll {
 					m.cfg.LabelMode = LabelModeHideAll
@@ -201,6 +252,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "v":
 			m.toggleView()
 			return m, nil
+		case "m":
+			return m, m.startEditing(fieldMetricFilter)
+		case "f":
+			return m, m.startEditing(fieldLabelFilter)
+		case "a":
+			return m, m.startEditing(fieldAggregation)
 		case "b":
 			// Scoped to the distribution view: the bucket mode means nothing in the
 			// metrics view, where b stays the viewport's page-up key.
@@ -270,8 +327,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 		// Initialize or resize viewport
-		// Reserve 2 lines: 1 for footer, 1 for safety margin
-		viewportHeight := msg.Height - 2
+		// Reserve the header's rows plus 2 lines: 1 for footer, 1 safety margin
+		viewportHeight := msg.Height - headerHeight - 2
 		if viewportHeight < 1 {
 			viewportHeight = 1
 		}
@@ -504,23 +561,41 @@ func (m model) View() string {
 		scrollHints = scrollHintStyle.Render(" ▼")
 	}
 
-	// Calculate available space for error/URL message
-	fixedPrefix := "? for help |  | Deltas: "
+	safetyMargin := 3
 	fixedSeparator := " | "
-	fixedWidth := lipgloss.Width(fixedPrefix) +
-		lipgloss.Width(viewStatus) +
-		lipgloss.Width(deltasStatus) +
-		lipgloss.Width(pauseStatus) +
-		lipgloss.Width(hideStaticStatus) +
-		lipgloss.Width(fixedSeparator) +
+
+	// The footer has one line and, while a header box is open, two things that
+	// want it: the edit hint and the endpoint status. The mode indicators step
+	// aside for the duration - they are static information, still there the
+	// moment the user presses esc - because a regex error is as long as the regex
+	// and would otherwise wrap the footer, costing a row of the table.
+	editing := m.editing != fieldNone
+
+	// Everything in the footer except its two variable-width parts: the left
+	// segment and the status message.
+	fixedWidth := lipgloss.Width(fixedSeparator) +
 		lipgloss.Width(scrollHints) +
 		lipgloss.Width("● ") // Approximate icon width
-
-	safetyMargin := 3
-	maxMessageLength := m.width - fixedWidth - safetyMargin
-	if maxMessageLength < 20 {
-		maxMessageLength = 20
+	if !editing {
+		fixedWidth += lipgloss.Width(" |  | Deltas: ") +
+			lipgloss.Width(viewStatus) +
+			lipgloss.Width(deltasStatus) +
+			lipgloss.Width(pauseStatus) +
+			lipgloss.Width(hideStaticStatus)
 	}
+
+	// The footer's left segment doubles as the edit hint, because the header is a
+	// fixed height with no room for one.
+	leftSegment := "? for help"
+	if editing {
+		leftSegment = m.headerHint(m.width - fixedWidth - safetyMargin - statusReserveWhileEdit)
+	}
+
+	// Whatever the rest of the line does not want. This used to be floored at a
+	// readable minimum, which pushed the footer past the terminal's right edge on
+	// a narrow window - and a wrapped footer costs a row of the table, which is
+	// worse than a short URL.
+	maxMessageLength := max(m.width-fixedWidth-lipgloss.Width(leftSegment)-safetyMargin, 0)
 
 	// Build status indicator with dynamic truncation
 	var statusIndicator string
@@ -538,11 +613,14 @@ func (m model) View() string {
 		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● ") + url
 	}
 
-	footer := fmt.Sprintf("? for help | %s | Deltas: %s%s%s | %s%s",
-		viewStatus, deltasStatus, pauseStatus, hideStaticStatus, statusIndicator, scrollHints)
+	footer := fmt.Sprintf("%s | %s | Deltas: %s%s%s | %s%s",
+		leftSegment, viewStatus, deltasStatus, pauseStatus, hideStaticStatus, statusIndicator, scrollHints)
+	if editing {
+		footer = fmt.Sprintf("%s | %s%s", leftSegment, statusIndicator, scrollHints)
+	}
 
 	// Show help popup if toggled
-	output := m.viewport.View() + "\n" + footer
+	output := m.renderHeader() + "\n" + m.viewport.View() + "\n" + footer
 	if m.showHelp {
 		output = m.renderHelpOverlay(output)
 	}
@@ -572,11 +650,16 @@ Help
   p           Pause/unpause updates
   s           Toggle hiding static (unchanging) metrics
   v           Switch between metrics and distributions
+  m           Edit the metric-name filter
+  f           Edit the label filter (k=v,k!=v,k=~re - all must match)
+  a           Edit the aggregation (labels to group by, e.g. pod or avg pod)
+  enter/esc   Apply / discard a header edit
+  tab         Move to the next header field
   b           Cycle bucket values (distribution view)
   enter       Expand a distribution, then zoom it full screen
   esc         Step back down: zoomed -> expanded -> collapsed
   ↑/↓         Scroll, or move the cursor in the distribution view
-  PgUp/PgDn   Page up/down
+  PgUp/PgDn   Page up/down (f is the filter key, not page-down)
   Home/End    Go to top/bottom
 
 Press ? to close
@@ -635,65 +718,6 @@ func formatMetricName(series *MetricSeries, hideLabels bool) string {
 		name += fmt.Sprintf("{%s}", strings.Join(labelParts, ","))
 	}
 	return name
-}
-
-// getFilteredLabelKeys extracts the label key(s) from a filter pattern
-// Returns the label keys that are being filtered on
-func getFilteredLabelKeys(filterLabel string) []string {
-	if filterLabel == "" {
-		return []string{}
-	}
-
-	// Check for key=value or key=~value pattern
-	if idx := strings.Index(filterLabel, "="); idx != -1 {
-		key := filterLabel[:idx]
-		return []string{key}
-	}
-
-	// Fallback regex pattern - can't determine specific keys
-	return []string{}
-}
-
-// matchesFilters reports whether a series passes the -filter-metric and
-// -filter-label options. Both views share it, so a filter means the same thing
-// whether it is applied to a gauge or to a histogram family.
-func (m model) matchesFilters(name string, labels map[string]string) bool {
-	if m.cfg.FilterMetric != "" {
-		matched, _ := regexp.MatchString(m.cfg.FilterMetric, name)
-		if !matched {
-			return false
-		}
-	}
-	if m.cfg.FilterLabel == "" {
-		return true
-	}
-
-	// Check for key=value or key=~value
-	if idx := strings.Index(m.cfg.FilterLabel, "="); idx != -1 {
-		key := m.cfg.FilterLabel[:idx]
-		rest := m.cfg.FilterLabel[idx+1:]
-
-		val, ok := labels[key]
-		if !ok {
-			return false
-		}
-
-		// Check if it is a regex match (starts with ~)
-		if strings.HasPrefix(rest, "~") {
-			matched, _ := regexp.MatchString(rest[1:], val)
-			return matched
-		}
-		// Exact match
-		return val == rest
-	}
-
-	// Fallback: match value against regex (original behavior)
-	for _, v := range labels {
-		if ok, _ := regexp.MatchString(m.cfg.FilterLabel, v); ok {
-			return true
-		}
-	}
-	return false
 }
 
 func calculateColumnWidths(headers []string, rows [][]string) []int {
@@ -863,10 +887,24 @@ func (m model) buildTable() string {
 		if !m.matchesFilters(series.Name, series.Labels) {
 			continue
 		}
-		if m.cfg.HideStatic && series.IsStatic() {
-			continue
-		}
 		filteredSeries = append(filteredSeries, series)
+	}
+
+	// Filter, then aggregate, then hide static - in that order. Aggregating first
+	// would fold in series the filter was asked to exclude, and judging staticness
+	// first would drop a member whose group is not static: the sum over a fixed
+	// series and a moving one moves, and is worth showing.
+	filteredSeries = m.aggregateSeries(filteredSeries)
+
+	if m.cfg.HideStatic {
+		kept := filteredSeries[:0]
+		for _, series := range filteredSeries {
+			if series.IsStatic() {
+				continue
+			}
+			kept = append(kept, series)
+		}
+		filteredSeries = kept
 	}
 
 	if len(filteredSeries) == 0 {
@@ -977,9 +1015,10 @@ func parseFlags() Config {
 	flag.IntVar(&cfg.History, "history", 10, "Number of historical samples to keep")
 	flag.StringVar(&cfg.LabelMode, "label-mode", LabelModeShowAll, "Label display mode: all, hide-filtered, hide-all")
 	flag.StringVar(&cfg.FilterMetric, "filter-metric", "", "Regex to filter metrics by name")
-	flag.StringVar(&cfg.FilterLabel, "filter-label", "", "Regex to filter metrics by label (e.g. 'env=prod')")
+	flag.StringVar(&cfg.FilterLabel, "filter-label", "", "Label filter: comma-separated clauses that must all match, each key=value, key!=value, key=~regex, key!~regex, or a bare regex tried against every label value (e.g. 'env=prod,region!=eu')")
 	flag.StringVar(&cfg.DeltaMode, "delta-mode", DeltaModeOff, "Delta mode: off, next, view")
 	flag.BoolVar(&cfg.HideStatic, "hide-static", false, "Hide metrics whose recent values never change")
+	flag.StringVar(&cfg.Aggregation, "aggregation", "", "Combine series that differ only in other labels: a comma-separated label list, optionally preceded by sum, avg, min, max or count (e.g. 'pod', 'avg pod,instance', 'count')")
 
 	flag.Parse()
 

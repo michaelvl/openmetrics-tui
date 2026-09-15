@@ -64,6 +64,25 @@ sum by (pod)        the PromQL spelling, if you prefer it
 Histograms fold with `sum` only; summaries are never folded and pass through
 untouched.
 
+### Label display
+
+A label the filter pins to a value is dropped from the `{}` braces, because the
+header already shows the filter and every visible series had to match it to be
+there at all. Under `env=prod,code=~5..` a row reads
+`http_requests_total{method=GET}`, not `{code=503,env=prod,method=GET}`.
+
+A clause that pins nothing leaves its label alone: `env!=dev` admits prod and
+staging both, so the column still says which one this row is. The same goes for
+`env!~dev|test` and for a bare regex, which names no label to begin with.
+
+Press `l` to cycle, or set `-label-mode`.
+
+```
+hide-filtered       the default, above
+hide-all            no braces at all
+all                 every label, filter or no filter
+```
+
 ## Processing of metrics
 
 The display has two independent axes. Deltas run _across time_, along a row, and

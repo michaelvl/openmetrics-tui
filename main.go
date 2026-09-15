@@ -208,11 +208,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// when the filter pins a label value down - a bare-regex filter names
 			// no label, so the mode would hide nothing.
 			if len(getFilteredLabelKeys(m.cfg.FilterLabel)) == 0 {
-				// Simple toggle: all <-> hide-all
-				if m.cfg.LabelMode == LabelModeShowAll {
-					m.cfg.LabelMode = LabelModeHideAll
-				} else {
+				// Simple toggle: labels <-> hide-all. With nothing pinned,
+				// hide-filtered and all render the same row, so the toggle treats
+				// them as one state rather than stepping between two modes that
+				// look alike.
+				if m.cfg.LabelMode == LabelModeHideAll {
 					m.cfg.LabelMode = LabelModeShowAll
+				} else {
+					m.cfg.LabelMode = LabelModeHideAll
 				}
 			} else {
 				// Full cycle: all -> hide-filtered -> hide-all -> all
@@ -667,7 +670,7 @@ Help
 
   q/ctrl+c    Quit
   ?           Toggle this help
-  l           Cycle label display mode
+  l           Cycle label display: filter-pinned labels hidden -> none -> all
   d           Cycle delta mode: raw values -> deltas across time (off/next/view)
   p           Pause/unpause updates
   s           Toggle hiding static (unchanging) metrics
@@ -786,6 +789,16 @@ func calculateColumnWidths(headers []string, rows [][]string) []int {
 }
 
 func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
+	// The labels the filter pins down are the same for every row, and
+	// hide-filtered is the default mode, so work them out once rather than once
+	// per series.
+	hidden := make(map[string]bool)
+	if m.cfg.LabelMode == LabelModeHideFiltered {
+		for _, key := range getFilteredLabelKeys(m.cfg.FilterLabel) {
+			hidden[key] = true
+		}
+	}
+
 	rows := [][]string{}
 	for _, series := range filteredSeries {
 		// Style metric name and labels based on label mode
@@ -794,26 +807,11 @@ func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
 		// Determine which labels to show based on mode
 		if m.cfg.LabelMode != LabelModeHideAll && len(series.Labels) > 0 {
 			var labelParts []string
-
-			if m.cfg.LabelMode == LabelModeHideFiltered {
-				// Hide only the filtered label keys
-				filteredKeys := getFilteredLabelKeys(m.cfg.FilterLabel)
-				filteredKeyMap := make(map[string]bool)
-				for _, key := range filteredKeys {
-					filteredKeyMap[key] = true
+			for k, v := range series.Labels {
+				if hidden[k] {
+					continue
 				}
-
-				// Only include labels whose keys are NOT in the filter
-				for k, v := range series.Labels {
-					if !filteredKeyMap[k] {
-						labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
-					}
-				}
-			} else {
-				// LabelModeShowAll - show all labels
-				for k, v := range series.Labels {
-					labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
-				}
+				labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
 			}
 
 			if len(labelParts) > 0 {
@@ -1037,7 +1035,7 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.URL, "url", "", "URL to poll metrics from (required)")
 	flag.DurationVar(&cfg.Interval, "interval", 5*time.Second, "Polling interval")
 	flag.IntVar(&cfg.History, "history", 10, "Number of historical samples to keep")
-	flag.StringVar(&cfg.LabelMode, "label-mode", LabelModeShowAll, "Label display mode: all, hide-filtered, hide-all")
+	flag.StringVar(&cfg.LabelMode, "label-mode", LabelModeHideFiltered, "Label display mode: all, hide-filtered (the default: drop labels the filter pins down), hide-all")
 	flag.StringVar(&cfg.FilterMetric, "filter-metric", "", "Regex to filter metrics by name")
 	flag.StringVar(&cfg.FilterLabel, "filter-label", "", "Label filter: comma-separated clauses that must all match, each key=value, key!=value, key=~regex, key!~regex, or a bare regex tried against every label value (e.g. 'env=prod,region!=eu')")
 	flag.StringVar(&cfg.DeltaMode, "delta-mode", DeltaModeOff, "Delta mode: off, next, view")

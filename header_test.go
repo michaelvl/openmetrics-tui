@@ -609,3 +609,21 @@ func TestLabelModeCycleSkipsHideFilteredWithoutAPinnedLabel(t *testing.T) {
 		t.Errorf("LabelMode = %q, want hide-filtered once a label is pinned", m.cfg.LabelMode)
 	}
 }
+
+// Hide-filtered is the starting mode, and with no filter it renders the same row
+// as all. The toggle has to step past that likeness to hide-all, or the first
+// press of l would look like a key that does nothing.
+func TestLabelModeTogglesToHideAllFromTheDefaultMode(t *testing.T) {
+	m := headerModel(t, 80, fourGauges)
+	m.cfg.LabelMode = LabelModeHideFiltered // the default, with no filter set
+
+	m, _ = press(m, "l")
+	if m.cfg.LabelMode != LabelModeHideAll {
+		t.Errorf("LabelMode = %q, want hide-all", m.cfg.LabelMode)
+	}
+
+	m, _ = press(m, "l")
+	if m.cfg.LabelMode != LabelModeShowAll {
+		t.Errorf("LabelMode = %q, want all", m.cfg.LabelMode)
+	}
+}

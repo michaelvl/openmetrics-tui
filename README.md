@@ -1,7 +1,7 @@
 # openmetrics-tui
 
 A terminal-based tool to monitor OpenMetrics/Prometheus metrics in real-time. A
-simple alternative to `watch curl http://... | grep metric_*` workflows.
+simple alternative to `watch 'curl http://... | grep metric_*`' workflows.
 
 Metrics view:
 
@@ -12,6 +12,8 @@ Distributions view:
 ![Screenshow-distributions](docs/screen2.png)
 
 ## Filtering and aggregation
+
+Metrics can be filtered on metric name and labels and be aggregated on labels.
 
 Each of the three takes the same syntax on the command line and in the TUI, so
 the examples below show the value alone.
@@ -67,9 +69,9 @@ untouched.
 ### Label display
 
 A label the filter pins to a value is dropped from the `{}` braces, because the
-header already shows the filter and every visible series had to match it to be
-there at all. Under `env=prod,code=~5..` a row reads
-`http_requests_total{method=GET}`, not `{code=503,env=prod,method=GET}`.
+header already shows the filter and every visible series implicitly match. Under
+`env=prod,code=~5..` a row reads `http_requests_total{method=GET}`, not
+`{code=503,env=prod,method=GET}`.
 
 A clause that pins nothing leaves its label alone: `env!=dev` admits prod and
 staging both, so the column still says which one this row is. The same goes for
@@ -78,9 +80,9 @@ staging both, so the column still says which one this row is. The same goes for
 Press `l` to cycle, or set `-label-mode`.
 
 ```
-hide-filtered       the default, above
-hide-all            no braces at all
-all                 every label, filter or no filter
+hide-filtered       the default described above
+hide-all            no labels at all
+all                 every label shown, filter or no filter
 ```
 
 ## Processing of metrics
@@ -97,22 +99,25 @@ Toggled with `d`, or set with `-delta-mode`.
 
 - `Deltas: Off` - metrics show raw.
 - `Deltas: Δ Next` - metrics columns show the delta to the next in the time
-  series, except for the current column, which show the raw metric value.
+  series, except for the current column, which show the raw metric value. _This
+  makes changes over time easier to observe_.
 - `Deltas: Δ View` - the current column shows the delta within the current view.
 
 A counter that falls has been restarted rather than measured, so the drop reads
-as missing (`.`) instead of a large negative number. A gauge is free to fall, and
-keeps its negative delta.
+as missing (`.`) instead of a large negative number. A gauge is free to fall,
+and keeps its negative delta.
 
 ### Buckets within a sample
 
 Toggled with `b`, in the distributions view. A histogram's buckets are
-cumulative as exported: `le=0.5` counts everything `le=0.1` already counted.
+cumulative as exported Prometheus/OpenMetric data, i.e. `le=0.5` counts
+everything `le=0.1` already counted.
 
 - `Buckets: Cumulative` - counts exactly as the exporter published them, rising
   as you read down towards `+Inf`.
-- `Buckets: Per bucket` - each bucket less the one below it, so a row counts only
-  the observations that fell in that band.
+- `Buckets: Per bucket` - each bucket less the one below it, so a row counts
+  only the observations that fell in that band. _This makes 'peaks' in the data
+  easier to observe_.
 
 Either way the counts are lifetime totals; pair them with `d` to see what
 arrived recently. Summary quantiles are latencies rather than counts, so bucket

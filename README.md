@@ -101,7 +101,9 @@ Toggled with `d`, or set with `-delta-mode`.
 - `Deltas: Δ Next` - metrics columns show the delta to the next in the time
   series, except for the current column, which show the raw metric value. _This
   makes changes over time easier to observe_.
-- `Deltas: Δ View` - the current column shows the delta within the current view.
+- `Deltas: Δ View` - the current column shows the delta within the current view,
+  i.e. the newest value less the oldest one still on screen, which is the sum of
+  the deltas in the columns beside it.
 
 A counter that falls has been restarted rather than measured, so the drop reads
 as missing (`.`) instead of a large negative number. A gauge is free to fall,

@@ -50,7 +50,7 @@ type MetricSeries struct {
 // Modes:
 // - "off": Returns raw absolute values
 // - "next": Historical values are deltas to next value (val[i+1] - val[i]), current is absolute
-// - "view": All values are deltas; historical same as "next", current is (last_historical - first_historical)
+// - "view": All values are deltas; historical same as "next", current is the growth across the whole window (last - first)
 //
 // A counter that goes backwards has been reset, and the drop is an artefact of
 // the restart rather than something that was measured, so it is reported as
@@ -82,34 +82,40 @@ func (s *MetricSeries) ValuesWithDeltas(mode string) []float64 {
 
 	// Handle the current/last value based on mode
 	if mode == "view" {
-		// In "view" mode, current shows diff between first and last historical
-		// Find first and last non-NaN historical values
-		firstHistIdx := -1
-		lastHistIdx := -1
-
-		for i := 0; i < lastIdx; i++ {
-			if !math.IsNaN(s.Values[i]) {
-				if firstHistIdx == -1 {
-					firstHistIdx = i
-				}
-				lastHistIdx = i
-			}
-		}
-
-		if firstHistIdx != -1 && lastHistIdx != -1 && firstHistIdx != lastHistIdx &&
-			!s.isReset(s.Values[firstHistIdx], s.Values[lastHistIdx]) {
-			res[lastIdx] = s.Values[lastHistIdx] - s.Values[firstHistIdx]
-		} else {
-			// Not enough historical data for a view delta, or a reset inside the
-			// window that would make the span meaningless.
-			res[lastIdx] = math.NaN()
-		}
+		res[lastIdx] = s.viewSpan()
 	} else {
 		// In "next" mode, last element is absolute
 		res[lastIdx] = s.Values[lastIdx]
 	}
 
 	return res
+}
+
+// viewSpan is the growth across everything on screen: the newest sample less the
+// oldest one. The newest sample counts - the delta it earned is already on screen
+// in the column beside the current one, so leaving it out would make the current
+// column lag a scrape behind the row it sums up.
+//
+// NaN when the window holds fewer than two samples, or when a counter reset
+// anywhere inside it makes the span an artefact of a restart rather than a
+// measurement.
+func (s *MetricSeries) viewSpan() float64 {
+	firstIdx, lastPresentIdx := -1, -1
+	for i, v := range s.Values {
+		if math.IsNaN(v) {
+			continue
+		}
+		if firstIdx == -1 {
+			firstIdx = i
+		} else if s.isReset(s.Values[lastPresentIdx], v) {
+			return math.NaN()
+		}
+		lastPresentIdx = i
+	}
+	if firstIdx == -1 || firstIdx == lastPresentIdx {
+		return math.NaN()
+	}
+	return s.Values[lastPresentIdx] - s.Values[firstIdx]
 }
 
 // isReset reports whether the series fell between two samples in a way that can

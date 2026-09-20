@@ -280,14 +280,20 @@ func TestValuesWithDeltasTransformsEachMode(t *testing.T) {
 		// stays absolute - that is what makes "next" readable beside a raw table.
 		{"next is a forward difference", KindCounter, []float64{10, 14, 20}, DeltaModeNext, []float64{4, 6, 20}},
 		// "view" agrees with "next" on the history and spends the newest column on
-		// the growth across everything else on screen.
-		{"view spans the history", KindCounter, []float64{10, 14, 20}, DeltaModeView, []float64{4, 6, 4}},
-		{"view needs two historical samples", KindCounter, []float64{10, 20}, DeltaModeView, []float64{10, nan}},
+		// the growth across everything on screen - the sum of the deltas beside it,
+		// newest sample included, so the column never lags a scrape behind its row.
+		{"view spans the history", KindCounter, []float64{10, 14, 20}, DeltaModeView, []float64{4, 6, 10}},
+		{"view spans a two-sample window", KindCounter, []float64{10, 20}, DeltaModeView, []float64{10, 10}},
+		{"view needs two samples", KindCounter, []float64{10}, DeltaModeView, []float64{nan}},
+		{"view spans across a gap", KindCounter, []float64{10, nan, 20}, DeltaModeView, []float64{nan, nan, 10}},
 		{"a gap blanks the deltas that touch it", KindCounter, []float64{10, nan, 20}, DeltaModeNext, []float64{nan, nan, 20}},
 		// A counter only falls when the process restarted, so the drop is not a
 		// measurement and must not be rendered as one.
 		{"a counter reset is blanked", KindCounter, []float64{100, 5, 9}, DeltaModeNext, []float64{nan, 4, 9}},
 		{"a reset inside the window blanks the view span", KindCounter, []float64{100, 5, 9}, DeltaModeView, []float64{nan, 4, nan}},
+		// The span ends above where it started, so only a reset found between the
+		// samples themselves can blank it.
+		{"a reset the endpoints hide still blanks the span", KindCounter, []float64{100, 5, 200}, DeltaModeView, []float64{nan, 195, nan}},
 		// A gauge is free to fall; blanking that would hide the measurement.
 		{"a falling gauge keeps its negative delta", KindGauge, []float64{100, 5, 9}, DeltaModeNext, []float64{-95, 4, 9}},
 	}

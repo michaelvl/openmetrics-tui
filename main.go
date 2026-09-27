@@ -66,6 +66,14 @@ type model struct {
 	deltaValueStyle     lipgloss.Style
 	cursorStyle         lipgloss.Style
 
+	// tickGen numbers the running tick chain. Changing the interval starts a new
+	// chain and bumps it, so ticks still in flight from the old chain are dropped
+	// instead of running alongside. fetching is set while a fetch is out, so a
+	// short interval against a slow target cannot pile fetches up - or have them
+	// land out of order and run the scrape log's timestamps backwards.
+	tickGen  int
+	fetching bool
+
 	// view is the top-level view on screen; the two remember their scroll
 	// position independently so switching back and forth is a round trip.
 	view           ViewMode
@@ -92,7 +100,34 @@ type model struct {
 	inputErr string
 }
 
-type tickMsg time.Time
+type tickMsg struct{ gen int }
+
+// intervalSteps is the ladder + and - move the scrape interval along.
+var intervalSteps = []time.Duration{
+	250 * time.Millisecond, 500 * time.Millisecond,
+	time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 15 * time.Second, 30 * time.Second,
+	time.Minute, 2 * time.Minute, 5 * time.Minute,
+}
+
+// stepInterval moves cur one step along intervalSteps, shorter when faster. An
+// interval given on the command line that is not on the ladder moves to the
+// nearest step in the asked direction. At either end it stays put.
+func stepInterval(cur time.Duration, faster bool) time.Duration {
+	if faster {
+		for i := len(intervalSteps) - 1; i >= 0; i-- {
+			if intervalSteps[i] < cur {
+				return intervalSteps[i]
+			}
+		}
+		return cur
+	}
+	for _, step := range intervalSteps {
+		if step > cur {
+			return step
+		}
+	}
+	return cur
+}
 
 // scrapeResult is a successful fetch together with when it completed, which is
 // the time the store files the scrape under.
@@ -177,10 +212,9 @@ func main() {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(
-		m.fetchCmd(),
-		m.tickCmd(),
-	)
+	// Init cannot record that a fetch is out, since its model is a copy, so the
+	// first fetch is left to the first tick rather than racing it.
+	return func() tea.Msg { return tickMsg{gen: m.tickGen} }
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -265,6 +299,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "p":
 			m.isPaused = !m.isPaused
 			return m, nil
+		case "+", "=", "-":
+			next := stepInterval(m.cfg.Interval, msg.String() != "-")
+			if next == m.cfg.Interval {
+				return m, nil
+			}
+			// Restart the timer from now, so speeding up from a long interval does
+			// not wait out the rest of it. The old chain dies on its next tick.
+			m.cfg.Interval = next
+			m.tickGen++
+			m.refresh()
+			return m, m.tickCmd()
 		case "s":
 			m.cfg.HideStatic = !m.cfg.HideStatic
 			m.refresh()
@@ -318,13 +363,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	case tickMsg:
-		if m.isPaused {
-			// When paused, only schedule next tick (no fetch)
+		if msg.gen != m.tickGen {
+			// A tick from before the interval changed; its chain ends here.
+			return m, nil
+		}
+		if m.isPaused || m.fetching {
+			// When paused, or while the last fetch is still out, only schedule the
+			// next tick. A skipped scrape shows up as a wider gap in the headers.
 			return m, m.tickCmd()
 		}
 		// When not paused, do both fetch and schedule next tick
+		m.fetching = true
 		return m, tea.Batch(m.fetchCmd(), m.tickCmd())
 	case scrapeResult:
+		m.fetching = false
 		if m.isPaused {
 			// Ignore fetch results while paused
 			return m, nil
@@ -337,6 +389,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case error:
 		// Store connection error but keep retrying
+		m.fetching = false
 		m.connectionError = msg
 		m.isConnected = false
 		// The target most likely restarted; values after the break are not a
@@ -552,6 +605,10 @@ func (m model) View() string {
 		deltasStatus = m.deltaValueStyle.Render("Δ") + " View"
 	}
 
+	// The scrape interval, which + and - change. It sits just before the
+	// endpoint, since it says how often that endpoint is scraped.
+	intervalStatus := "⟳ " + formatAge(m.cfg.Interval) + " | "
+
 	// Build pause status
 	var pauseStatus string
 	if m.isPaused {
@@ -614,6 +671,7 @@ func (m model) View() string {
 			lipgloss.Width(viewStatus) +
 			lipgloss.Width(deltasStatus) +
 			lipgloss.Width(bucketStatus) +
+			lipgloss.Width(intervalStatus) +
 			lipgloss.Width(pauseStatus) +
 			lipgloss.Width(hideStaticStatus)
 	}
@@ -628,8 +686,10 @@ func (m model) View() string {
 	// Whatever the rest of the line does not want. This used to be floored at a
 	// readable minimum, which pushed the footer past the terminal's right edge on
 	// a narrow window - and a wrapped footer costs a row of the table, which is
-	// worse than a short URL.
-	maxMessageLength := max(m.width-fixedWidth-lipgloss.Width(leftSegment)-safetyMargin, 0)
+	// worse than a short URL. It is left unclamped until the droppable segments
+	// below have had their say, so the room a dropped segment frees is added to
+	// the real shortfall rather than to zero.
+	maxMessageLength := m.width - fixedWidth - lipgloss.Width(leftSegment) - safetyMargin
 
 	// On a narrow terminal the fixed segments crowd the endpoint out entirely,
 	// and truncateMessage will not shrink it below an ellipsis - so the line
@@ -640,6 +700,12 @@ func (m model) View() string {
 		maxMessageLength += lipgloss.Width(bucketStatus)
 		bucketStatus = ""
 	}
+	// The interval goes next, for the same reason.
+	if !editing && maxMessageLength < minStatusWidth {
+		maxMessageLength += lipgloss.Width(intervalStatus)
+		intervalStatus = ""
+	}
+	maxMessageLength = max(maxMessageLength, 0)
 
 	// Build status indicator with dynamic truncation
 	var statusIndicator string
@@ -657,8 +723,8 @@ func (m model) View() string {
 		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● ") + url
 	}
 
-	footer := fmt.Sprintf("%s | %s | Deltas: %s%s%s%s | %s%s",
-		leftSegment, viewStatus, deltasStatus, bucketStatus, pauseStatus, hideStaticStatus, statusIndicator, scrollHints)
+	footer := fmt.Sprintf("%s | %s | Deltas: %s%s%s%s | %s%s%s",
+		leftSegment, viewStatus, deltasStatus, bucketStatus, pauseStatus, hideStaticStatus, intervalStatus, statusIndicator, scrollHints)
 	if editing {
 		footer = fmt.Sprintf("%s | %s%s", leftSegment, statusIndicator, scrollHints)
 	}
@@ -692,6 +758,7 @@ Help
   l           Cycle label display: filter-pinned labels hidden -> none -> all
   d           Cycle delta mode: raw values -> deltas across time (off/next/view)
   p           Pause/unpause updates
+  +/-         Scrape faster / slower
   s           Toggle hiding static (unchanging) metrics
   v           Switch between metrics and distributions
   m           Edit the metric-name filter
@@ -738,8 +805,9 @@ var baseStyle = lipgloss.NewStyle().
 	BorderForeground(lipgloss.Color("240"))
 
 func (m model) tickCmd() tea.Cmd {
-	return tea.Tick(m.cfg.Interval, func(t time.Time) tea.Msg {
-		return tickMsg(t)
+	gen := m.tickGen
+	return tea.Tick(m.cfg.Interval, func(time.Time) tea.Msg {
+		return tickMsg{gen: gen}
 	})
 }
 
@@ -756,17 +824,26 @@ func (m model) fetchCmd() tea.Cmd {
 // columnHeaders labels n history columns, oldest first. Each shows how long
 // before the newest scrape it was taken, from the store's scrape log, so a
 // failed or paused stretch shows up as a jump between neighbouring headers.
-// Columns no scrape has filled yet fall back to multiples of the interval.
+// Columns no scrape has filled yet continue back from the oldest real one in
+// steps of the current interval, so they never read younger than a neighbour.
 func (m model) columnHeaders(n int) []string {
 	headers := make([]string, n)
 	newest, haveNewest := m.store.ScrapeAt(0)
+	oldestOffset, oldestAge := 0, time.Duration(0)
 	for i := range headers {
 		offset := n - 1 - i
 		if offset == 0 {
 			headers[i] = "Curr"
 			continue
 		}
-		age := time.Duration(offset) * m.cfg.Interval
+		scrape, ok := m.store.ScrapeAt(offset)
+		if ok && haveNewest && !scrape.Time.IsZero() && offset > oldestOffset {
+			oldestOffset, oldestAge = offset, newest.Time.Sub(scrape.Time)
+		}
+	}
+	for i := range headers[:n-1] {
+		offset := n - 1 - i
+		age := oldestAge + time.Duration(offset-oldestOffset)*m.cfg.Interval
 		if scrape, ok := m.store.ScrapeAt(offset); ok && haveNewest && !scrape.Time.IsZero() {
 			age = newest.Time.Sub(scrape.Time)
 		}
@@ -775,9 +852,17 @@ func (m model) columnHeaders(n int) []string {
 	return headers
 }
 
-// formatAge renders a column's age compactly, to the second: "10s", "2m30s",
-// "1h5m". Hours drop the seconds, which no one reads at that distance.
+// formatAge renders a duration compactly: "250ms", "1.5s", "10s", "2m30s",
+// "1h5m". Precision falls off with size - 10ms under a second, a tenth under
+// ten seconds, whole seconds up to an hour and whole minutes past it - so tick
+// jitter does not show up as noise in the headers.
 func formatAge(d time.Duration) string {
+	if r := d.Round(10 * time.Millisecond); r > 0 && r < time.Second {
+		return fmt.Sprintf("%dms", r.Milliseconds())
+	}
+	if r := d.Round(100 * time.Millisecond); r < 10*time.Second && r%time.Second != 0 {
+		return strconv.FormatFloat(r.Seconds(), 'f', 1, 64) + "s"
+	}
 	secs := int(d.Round(time.Second).Seconds())
 	h, mins, sec := secs/3600, secs%3600/60, secs%60
 	switch {

@@ -38,6 +38,9 @@ var distHeaders = append([]string{"DISTRIBUTION", "COUNT", "RATE"}, displayQuant
 
 var faintStyle = lipgloss.NewStyle().Faint(true)
 
+// epochHeaderStyle marks a grid column header from before a connection break.
+var epochHeaderStyle = epochValueStyle.Faint(true)
+
 // nativeHistogramNote replaces the grid for a native (exponential) histogram.
 // Those carry no classic buckets at all, so there is nothing to lay out - but a
 // blank block would read as a bug rather than as an unsupported encoding.
@@ -55,6 +58,19 @@ var shadeRamp = []lipgloss.Style{
 	lipgloss.NewStyle().Background(lipgloss.Color("32")),
 	lipgloss.NewStyle().Background(lipgloss.Color("39")).Foreground(lipgloss.Color("232")),
 	lipgloss.NewStyle().Background(lipgloss.Color("45")).Foreground(lipgloss.Color("232")),
+}
+
+// epochShadeRamp is shadeRamp shifted towards violet, for columns scraped
+// before a connection break. Same number of steps, so a value earns the same
+// step on either ramp.
+var epochShadeRamp = []lipgloss.Style{
+	lipgloss.NewStyle().Background(lipgloss.Color("53")),
+	lipgloss.NewStyle().Background(lipgloss.Color("54")),
+	lipgloss.NewStyle().Background(lipgloss.Color("56")),
+	lipgloss.NewStyle().Background(lipgloss.Color("92")),
+	lipgloss.NewStyle().Background(lipgloss.Color("98")),
+	lipgloss.NewStyle().Background(lipgloss.Color("141")).Foreground(lipgloss.Color("232")),
+	lipgloss.NewStyle().Background(lipgloss.Color("183")).Foreground(lipgloss.Color("232")),
 }
 
 // visibleDistributions returns the families the current filters admit, sorted by
@@ -196,7 +212,7 @@ func (m model) renderZoom(entry distEntry) string {
 // zoomStats restates the collapsed line's derived numbers for the zoomed view,
 // where that line is no longer on screen.
 func (m model) zoomStats(dist *DistributionSeries) string {
-	stats := distSummary(dist, distScrapeCount(dist)-1, m.cfg.Interval)
+	stats := distSummary(dist, distScrapeCount(dist)-1, m.store.Scrapes, m.cfg.Interval)
 	var parts []string
 	if stats.CountOK {
 		parts = append(parts, "count "+formatCompact(stats.Count))
@@ -225,6 +241,9 @@ type gridLayout struct {
 	boundWidth int
 	headers    []string
 	widths     []int
+	// olderEpoch marks the columns scraped in an odd number of connection breaks
+	// ago, which are drawn in the alternate shades.
+	olderEpoch []bool
 }
 
 // newDistBlock derives one family's display values under the current bucket and
@@ -236,7 +255,7 @@ func (m model) newDistBlock(entry distEntry) *distBlock {
 		// A summary's rows are reported quantiles, not bucket bounds.
 		block.label = "quantile"
 	}
-	block.rows = bucketDisplayValues(entry.dist, m.bucketMode, m.cfg.DeltaMode)
+	block.rows = bucketDisplayValues(entry.dist, m.bucketMode, m.cfg.DeltaMode, m.store.Epochs(distScrapeCount(entry.dist)))
 	for _, point := range entry.dist.Points {
 		block.bounds = append(block.bounds, formatBound(point.Bound))
 	}
@@ -253,11 +272,11 @@ func (m model) newDistBlock(entry distEntry) *distBlock {
 func (m model) layOutGrid(blocks []*distBlock, indent int) gridLayout {
 	total := m.historyColumns()
 
-	grid := gridLayout{headers: make([]string, total), widths: make([]int, total)}
-	for j := range grid.headers {
-		grid.headers[j] = fmt.Sprintf("-%ds", (total-1-j)*int(m.cfg.Interval.Seconds()))
+	grid := gridLayout{headers: m.columnHeaders(total), widths: make([]int, total)}
+	grid.olderEpoch = make([]bool, total)
+	for j := range grid.olderEpoch {
+		grid.olderEpoch[j] = m.store.EpochParity(total-1-j) == 1
 	}
-	grid.headers[total-1] = "Curr"
 
 	for _, block := range blocks {
 		if w := lipgloss.Width(block.label); w > grid.boundWidth {
@@ -295,6 +314,7 @@ func (m model) layOutGrid(blocks []*distBlock, indent int) gridLayout {
 	}
 	grid.headers = grid.headers[total-keep:]
 	grid.widths = grid.widths[total-keep:]
+	grid.olderEpoch = grid.olderEpoch[total-keep:]
 
 	for _, block := range blocks {
 		block.trimTo(total, keep)
@@ -341,9 +361,14 @@ func (m model) renderBlock(block *distBlock, indent string, grid gridLayout) []s
 
 	header := make([]gridCell, len(grid.headers))
 	for j, head := range grid.headers {
-		header[j] = gridCell{text: head}
+		// Styled cell by cell rather than as one faint line, so a header in the
+		// epoch colour does not reset the faintness of those after it.
+		header[j] = gridCell{text: head, style: &faintStyle}
+		if grid.olderEpoch[j] {
+			header[j].style = &epochHeaderStyle
+		}
 	}
-	lines := []string{faintStyle.Render(renderGridRow(indent, block.label, grid.boundWidth, header, grid.widths))}
+	lines := []string{renderGridRow(indent, faintStyle.Render(block.label), grid.boundWidth, header, grid.widths)}
 
 	shade := block.dist.Kind == KindHistogram
 	for i, bound := range block.bounds {
@@ -352,7 +377,10 @@ func (m model) renderBlock(block *distBlock, indent string, grid gridLayout) []s
 			val := block.rows[i][j]
 			cells[j] = gridCell{text: formatGridValue(val)}
 			if shade {
-				cells[j].style = shadeFor(val, block.max)
+				cells[j].style = shadeFor(val, block.max, grid.olderEpoch[j])
+			}
+			if cells[j].style == nil && grid.olderEpoch[j] {
+				cells[j].style = &epochValueStyle
 			}
 		}
 		lines = append(lines, renderGridRow(indent, bound, grid.boundWidth, cells, grid.widths))
@@ -366,7 +394,10 @@ func (m model) renderBlock(block *distBlock, indent string, grid gridLayout) []s
 // Only positive values shade: an empty band should recede into the background
 // rather than claim the darkest step, and with the delta key on a value can be
 // negative, which no intensity scale can express.
-func shadeFor(val, max float64) *lipgloss.Style {
+//
+// olderEpoch picks the alternate ramp, for columns on the far side of a
+// connection break.
+func shadeFor(val, max float64, olderEpoch bool) *lipgloss.Style {
 	if max <= 0 || math.IsNaN(val) || val <= 0 {
 		return nil
 	}
@@ -376,6 +407,9 @@ func shadeFor(val, max float64) *lipgloss.Style {
 	}
 	if step > len(shadeRamp) {
 		step = len(shadeRamp)
+	}
+	if olderEpoch {
+		return &epochShadeRamp[step-1]
 	}
 	return &shadeRamp[step-1]
 }
@@ -440,7 +474,7 @@ func (m model) distributionHeader(entries []distEntry) string {
 func (m model) collapsedCells(entry distEntry) []string {
 	dist := entry.dist
 	total := distScrapeCount(dist)
-	stats := distSummary(dist, total-1, m.cfg.Interval)
+	stats := distSummary(dist, total-1, m.store.Scrapes, m.cfg.Interval)
 
 	count, rate := ".", "."
 	if stats.CountOK {

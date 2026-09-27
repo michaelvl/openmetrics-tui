@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
@@ -36,7 +37,7 @@ request_duration_seconds_count{method="GET"} 5000
 
 func TestDistributionsAreKeptOutOfSimpleMetrics(t *testing.T) {
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, histogramFixture))
+	store.UpdateFromFamilies(parseFamilies(t, histogramFixture), time.Time{})
 
 	var names []string
 	for _, series := range store.Metrics {
@@ -72,7 +73,7 @@ func TestDistributionsAreKeptOutOfSimpleMetrics(t *testing.T) {
 
 func TestBucketsAreSortedAndNamedLikeTheWireFormat(t *testing.T) {
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, histogramFixture))
+	store.UpdateFromFamilies(parseFamilies(t, histogramFixture), time.Time{})
 	dist := store.Distributions[`request_duration_seconds{method="GET"}`]
 
 	wantBounds := []float64{0.05, 1, math.Inf(+1)}
@@ -114,9 +115,9 @@ func TestBucketsAreSortedAndNamedLikeTheWireFormat(t *testing.T) {
 // Values always refers to the same scrape no matter which series it came from.
 func TestScrapesStayAlignedWhenAFamilyDisappears(t *testing.T) {
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, histogramFixture))
-	store.UpdateFromFamilies(parseFamilies(t, histogramFixture))
-	store.UpdateFromFamilies(parseFamilies(t, "# TYPE requests_in_flight gauge\nrequests_in_flight 9\n"))
+	store.UpdateFromFamilies(parseFamilies(t, histogramFixture), time.Time{})
+	store.UpdateFromFamilies(parseFamilies(t, histogramFixture), time.Time{})
+	store.UpdateFromFamilies(parseFamilies(t, "# TYPE requests_in_flight gauge\nrequests_in_flight 9\n"), time.Time{})
 
 	for sig, series := range store.Metrics {
 		if len(series.Values) != 3 {
@@ -155,9 +156,9 @@ request_duration_seconds_bucket{le="0.5"} 15
 request_duration_seconds_bucket{le="+Inf"} 22
 `
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, withoutBucket))
-	store.UpdateFromFamilies(parseFamilies(t, withoutBucket))
-	store.UpdateFromFamilies(parseFamilies(t, withBucket))
+	store.UpdateFromFamilies(parseFamilies(t, withoutBucket), time.Time{})
+	store.UpdateFromFamilies(parseFamilies(t, withoutBucket), time.Time{})
+	store.UpdateFromFamilies(parseFamilies(t, withBucket), time.Time{})
 
 	dist := store.Distributions[`request_duration_seconds{}`]
 	if len(dist.Points) != 3 || dist.Points[1].Bound != 0.5 {
@@ -168,7 +169,7 @@ request_duration_seconds_bucket{le="+Inf"} 22
 		t.Fatalf("new bucket should start fresh, got %v", newSeries.Values)
 	}
 
-	m := model{cfg: Config{History: 3, DeltaMode: DeltaModeOff, LabelMode: LabelModeHideAll}}
+	m := model{cfg: Config{History: 3, DeltaMode: DeltaModeOff, LabelMode: LabelModeHideAll}, store: store}
 	rows := m.buildTableRows([]*MetricSeries{newSeries, dist.Points[0].Series})
 	if got := rows[0]; len(got) != 4 || got[1] != "" || got[2] != "" || got[3] != "15" {
 		t.Errorf("new bucket row = %q, want the value in the current column", got)
@@ -185,7 +186,7 @@ rpc_duration_seconds{quantile="0.99"} 0.42
 rpc_duration_seconds_count 12
 `
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, fixture))
+	store.UpdateFromFamilies(parseFamilies(t, fixture), time.Time{})
 
 	dist := store.Distributions[`rpc_duration_seconds{}`]
 	if dist == nil {
@@ -222,7 +223,7 @@ rpc_duration_seconds{quantile="0.5"} 0.12
 rpc_duration_seconds_count 12
 `
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, fixture))
+	store.UpdateFromFamilies(parseFamilies(t, fixture), time.Time{})
 
 	dist := store.Distributions[`rpc_duration_seconds{}`]
 	if dist.Sum != nil {
@@ -236,7 +237,7 @@ rpc_duration_seconds_count 12
 func TestHistoryLimitPrunesBuckets(t *testing.T) {
 	store := NewStore(2)
 	for i := 0; i < 4; i++ {
-		store.UpdateFromFamilies(parseFamilies(t, histogramFixture))
+		store.UpdateFromFamilies(parseFamilies(t, histogramFixture), time.Time{})
 	}
 	dist := store.Distributions[`request_duration_seconds{method="GET"}`]
 	for _, point := range dist.Points {
@@ -299,7 +300,7 @@ func TestValuesWithDeltasTransformsEachMode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := (&MetricSeries{Kind: tc.kind, Values: tc.values}).ValuesWithDeltas(tc.mode)
+			got := (&MetricSeries{Kind: tc.kind, Values: tc.values}).ValuesWithDeltas(tc.mode, nil)
 			if len(got) != len(tc.want) {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
@@ -313,6 +314,100 @@ func TestValuesWithDeltasTransformsEachMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A failed scrape splits the history into epochs: the target most likely
+// restarted, so the columns either side of it come from different processes.
+func TestFailedScrapesStartANewEpoch(t *testing.T) {
+	const fixture = "# TYPE g gauge\ng 1\n"
+	t0 := time.Unix(1000, 0)
+	store := NewStore(10)
+
+	// A failure before anything was scraped separates nothing.
+	store.MarkBreak()
+	store.UpdateFromFamilies(parseFamilies(t, fixture), t0)
+	// Consecutive failures are one outage, so one break.
+	store.MarkBreak()
+	store.MarkBreak()
+	store.UpdateFromFamilies(parseFamilies(t, fixture), t0.Add(30*time.Second))
+	store.UpdateFromFamilies(parseFamilies(t, fixture), t0.Add(35*time.Second))
+
+	if got, want := store.Epochs(3), []int{0, 1, 1}; !equalInts(got, want) {
+		t.Errorf("epochs = %v, want %v", got, want)
+	}
+	if got := store.EpochParity(0); got != 0 {
+		t.Errorf("newest column parity = %d, want 0", got)
+	}
+	if got := store.EpochParity(2); got != 1 {
+		t.Errorf("pre-break column parity = %d, want 1", got)
+	}
+	if scrape, _ := store.ScrapeAt(1); !scrape.Time.Equal(t0.Add(30 * time.Second)) {
+		t.Errorf("ScrapeAt(1).Time = %v, want the second scrape's time", scrape.Time)
+	}
+}
+
+// The scrape log is pruned with the series, so the two stay right-aligned.
+func TestScrapeLogIsPrunedWithTheHistory(t *testing.T) {
+	store := NewStore(2)
+	for i := 0; i < 5; i++ {
+		store.UpdateFromFamilies(parseFamilies(t, "# TYPE g gauge\ng 1\n"), time.Unix(int64(i), 0))
+	}
+	if len(store.Scrapes) != 2 || len(store.Metrics[`g{}`].Values) != 2 {
+		t.Fatalf("scrapes = %d, values = %d, want 2 each", len(store.Scrapes), len(store.Metrics[`g{}`].Values))
+	}
+	if got := store.Scrapes[1].Time; !got.Equal(time.Unix(4, 0)) {
+		t.Errorf("newest scrape time = %v, want the last scrape", got)
+	}
+}
+
+// Deltas never span an epoch boundary, whatever the kind: across a restart even
+// a rising counter or a falling gauge mixes two processes' numbers.
+func TestValuesWithDeltasStopAtAnEpochBoundary(t *testing.T) {
+	nan := math.NaN()
+	cases := []struct {
+		name   string
+		kind   MetricKind
+		values []float64
+		epochs []int
+		mode   string
+		want   []float64
+	}{
+		{"a rising counter across a break is blanked", KindCounter, []float64{10, 14, 20}, []int{0, 1, 1}, DeltaModeNext, []float64{nan, 6, 20}},
+		{"a gauge across a break is blanked", KindGauge, []float64{100, 5, 9}, []int{0, 1, 1}, DeltaModeNext, []float64{nan, 4, 9}},
+		{"view spans only the newest epoch", KindCounter, []float64{10, 14, 20, 26}, []int{0, 0, 1, 1}, DeltaModeView, []float64{4, nan, 6, 6}},
+		{"view needs two samples in the newest epoch", KindCounter, []float64{10, 14, 20}, []int{0, 0, 1}, DeltaModeView, []float64{4, nan, nan}},
+		// A series that appeared after the break has a shorter history; it lines
+		// up with the tail of the epochs, not the head.
+		{"epochs are right-aligned to a shorter series", KindCounter, []float64{14, 20}, []int{0, 1, 1}, DeltaModeNext, []float64{6, 20}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := (&MetricSeries{Kind: tc.kind, Values: tc.values}).ValuesWithDeltas(tc.mode, tc.epochs)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if math.IsNaN(got[i]) && math.IsNaN(tc.want[i]) {
+					continue
+				}
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func keysOf[V any](m map[string]V) []string {

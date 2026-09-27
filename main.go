@@ -94,6 +94,22 @@ type model struct {
 
 type tickMsg time.Time
 
+// scrapeResult is a successful fetch together with when it completed, which is
+// the time the store files the scrape under.
+type scrapeResult struct {
+	families map[string]*dto.MetricFamily
+	at       time.Time
+}
+
+// Values scraped before the latest connection break are drawn in these instead
+// of the usual styles, alternating epoch by epoch, so the columns either side of
+// a break (usually a restarted target) read as separate runs. The newest epoch
+// always keeps the usual styles.
+var (
+	epochValueStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("146")) // grey-lavender
+	epochDeltaStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("179")) // muted orange
+)
+
 func main() {
 	cfg := parseFlags()
 
@@ -308,21 +324,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// When not paused, do both fetch and schedule next tick
 		return m, tea.Batch(m.fetchCmd(), m.tickCmd())
-	case map[string]*dto.MetricFamily: // Fetch result
+	case scrapeResult:
 		if m.isPaused {
 			// Ignore fetch results while paused
 			return m, nil
 		}
-		m.store.UpdateFromFamilies(msg)
+		m.store.UpdateFromFamilies(msg.families, msg.at)
 		m.isConnected = true
 		m.connectionError = nil
-		m.lastSuccessfulFetch = time.Now()
+		m.lastSuccessfulFetch = msg.at
 		m.refresh()
 		return m, nil
 	case error:
 		// Store connection error but keep retrying
 		m.connectionError = msg
 		m.isConnected = false
+		// The target most likely restarted; values after the break are not a
+		// continuation of those before it.
+		m.store.MarkBreak()
 		// Don't set m.err - that's for fatal errors only
 		// The tick/fetch cycle continues automatically
 		return m, nil
@@ -730,8 +749,48 @@ func (m model) fetchCmd() tea.Cmd {
 		if err != nil {
 			return err
 		}
-		return families
+		return scrapeResult{families: families, at: time.Now()}
 	}
+}
+
+// columnHeaders labels n history columns, oldest first. Each shows how long
+// before the newest scrape it was taken, from the store's scrape log, so a
+// failed or paused stretch shows up as a jump between neighbouring headers.
+// Columns no scrape has filled yet fall back to multiples of the interval.
+func (m model) columnHeaders(n int) []string {
+	headers := make([]string, n)
+	newest, haveNewest := m.store.ScrapeAt(0)
+	for i := range headers {
+		offset := n - 1 - i
+		if offset == 0 {
+			headers[i] = "Curr"
+			continue
+		}
+		age := time.Duration(offset) * m.cfg.Interval
+		if scrape, ok := m.store.ScrapeAt(offset); ok && haveNewest && !scrape.Time.IsZero() {
+			age = newest.Time.Sub(scrape.Time)
+		}
+		headers[i] = "-" + formatAge(age)
+	}
+	return headers
+}
+
+// formatAge renders a column's age compactly, to the second: "10s", "2m30s",
+// "1h5m". Hours drop the seconds, which no one reads at that distance.
+func formatAge(d time.Duration) string {
+	secs := int(d.Round(time.Second).Seconds())
+	h, mins, sec := secs/3600, secs%3600/60, secs%60
+	switch {
+	case h > 0 && mins > 0:
+		return fmt.Sprintf("%dh%dm", h, mins)
+	case h > 0:
+		return fmt.Sprintf("%dh", h)
+	case mins > 0 && sec > 0:
+		return fmt.Sprintf("%dm%ds", mins, sec)
+	case mins > 0:
+		return fmt.Sprintf("%dm", mins)
+	}
+	return fmt.Sprintf("%ds", sec)
 }
 
 func formatMetricName(series *MetricSeries, hideLabels bool) string {
@@ -823,7 +882,7 @@ func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
 		row := []string{styledName}
 
 		// Get values - build all possible value columns up to history limit
-		vals := series.ValuesWithDeltas(m.cfg.DeltaMode)
+		vals := series.ValuesWithDeltas(m.cfg.DeltaMode, m.store.Epochs(len(series.Values)))
 		numValueCols := m.cfg.History
 		if numValueCols < 1 {
 			numValueCols = 1
@@ -834,6 +893,7 @@ func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
 			offset := numValueCols - 1 - i
 			valIdx := len(vals) - 1 - offset
 			isCurrentValue := (i == numValueCols-1)
+			olderEpoch := m.store.EpochParity(offset) == 1
 
 			if valIdx >= 0 && valIdx < len(vals) {
 				val := vals[valIdx]
@@ -862,11 +922,17 @@ func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
 							if val > 0 {
 								formatted = "+" + formatted
 							}
-							formatted = m.deltaValueStyle.Render(formatted)
+							if olderEpoch {
+								formatted = epochDeltaStyle.Render(formatted)
+							} else {
+								formatted = m.deltaValueStyle.Render(formatted)
+							}
 						}
 					} else if isCurrentValue {
 						// Current value in non-delta modes is shown in magenta
 						formatted = m.currentValueStyle.Render(formatted)
+					} else if olderEpoch {
+						formatted = epochValueStyle.Render(formatted)
 					}
 					row = append(row, formatted)
 				}
@@ -959,10 +1025,9 @@ func (m model) buildTable() string {
 		maxPossibleValueCols = 1
 	}
 	allHeaders := []string{"Metric"}
-	for i := 0; i < maxPossibleValueCols; i++ {
-		title := fmt.Sprintf("-%ds", (maxPossibleValueCols-1-i)*int(m.cfg.Interval.Seconds()))
-		if i == maxPossibleValueCols-1 {
-			title = "Curr"
+	for i, title := range m.columnHeaders(maxPossibleValueCols) {
+		if m.store.EpochParity(maxPossibleValueCols-1-i) == 1 {
+			title = epochValueStyle.Render(title)
 		}
 		allHeaders = append(allHeaders, title)
 	}

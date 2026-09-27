@@ -103,7 +103,10 @@ func valueAt(series *MetricSeries, idx, total int) float64 {
 // delta mode walks each row across time. Summary quantiles are latencies rather
 // than cumulative counts, so decumulating them would be meaningless and the
 // bucket mode passes them through untouched; the delta mode still applies.
-func bucketDisplayValues(dist *DistributionSeries, mode BucketMode, deltaMode string) [][]float64 {
+//
+// epochs is the store's scrape epochs (Store.Epochs), which keep the delta mode
+// from differencing across a connection break.
+func bucketDisplayValues(dist *DistributionSeries, mode BucketMode, deltaMode string, epochs []int) [][]float64 {
 	total := distScrapeCount(dist)
 	rows := make([][]float64, len(dist.Points))
 	for i, point := range dist.Points {
@@ -130,7 +133,7 @@ func bucketDisplayValues(dist *DistributionSeries, mode BucketMode, deltaMode st
 			if point.Series != nil {
 				kind = point.Series.Kind
 			}
-			rows[i] = (&MetricSeries{Kind: kind, Values: rows[i]}).ValuesWithDeltas(deltaMode)
+			rows[i] = (&MetricSeries{Kind: kind, Values: rows[i]}).ValuesWithDeltas(deltaMode, epochs)
 		}
 	}
 	return rows
@@ -296,9 +299,11 @@ type distStats struct {
 }
 
 // distSummary derives the collapsed line for a distribution at scrape index
-// scrapeIdx. interval is the polling interval, needed to turn a count delta into
-// a rate.
-func distSummary(dist *DistributionSeries, scrapeIdx int, interval time.Duration) distStats {
+// scrapeIdx. scrapes is the store's scrape log, right-aligned to the family's
+// history; the rate is taken over the real time between the two scrapes it
+// compares, and never across a connection break. interval stands in for the
+// elapsed time when the log does not reach back far enough.
+func distSummary(dist *DistributionSeries, scrapeIdx int, scrapes []ScrapeInfo, interval time.Duration) distStats {
 	stats := distStats{Cells: make([]quantileCell, 0, len(displayQuantiles))}
 	for _, q := range displayQuantiles {
 		stats.Cells = append(stats.Cells, estimateQuantile(dist, scrapeIdx, q))
@@ -310,6 +315,9 @@ func distSummary(dist *DistributionSeries, scrapeIdx int, interval time.Duration
 	}
 	stats.Count, stats.CountOK = count, true
 
+	total := distScrapeCount(dist)
+	current, haveCurrent := scrapeFor(scrapes, total, scrapeIdx)
+
 	// Walk back to the most recent scrape that reported a count; holes in the
 	// history widen the window rather than invalidating the rate.
 	for idx := scrapeIdx - 1; idx >= 0; idx-- {
@@ -318,6 +326,15 @@ func distSummary(dist *DistributionSeries, scrapeIdx int, interval time.Duration
 			continue
 		}
 		elapsed := interval.Seconds() * float64(scrapeIdx-idx)
+		if earlier, ok := scrapeFor(scrapes, total, idx); ok && haveCurrent {
+			if earlier.Epoch != current.Epoch {
+				// The count on the far side of a break belongs to another process.
+				break
+			}
+			if !earlier.Time.IsZero() && !current.Time.IsZero() {
+				elapsed = current.Time.Sub(earlier.Time).Seconds()
+			}
+		}
 		if elapsed > 0 && count >= prev {
 			stats.Rate, stats.RateOK = (count-prev)/elapsed, true
 		}
@@ -325,4 +342,14 @@ func distSummary(dist *DistributionSeries, scrapeIdx int, interval time.Duration
 		break
 	}
 	return stats
+}
+
+// scrapeFor maps scrape index idx of a total-long history onto the store's
+// scrape log, which the history is right-aligned against.
+func scrapeFor(scrapes []ScrapeInfo, total, idx int) (ScrapeInfo, bool) {
+	pos := len(scrapes) - total + idx
+	if pos < 0 || pos >= len(scrapes) {
+		return ScrapeInfo{}, false
+	}
+	return scrapes[pos], true
 }

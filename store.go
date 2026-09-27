@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
 )
@@ -56,7 +57,13 @@ type MetricSeries struct {
 // the restart rather than something that was measured, so it is reported as
 // missing rather than as a large negative number. A gauge is free to fall -
 // that is what a gauge is for - so the guard is keyed on the series kind.
-func (s *MetricSeries) ValuesWithDeltas(mode string) []float64 {
+//
+// epochs holds the scrape epoch of each value, right-aligned to Values the same
+// way every series is (see Store.Epochs). Two samples from different epochs were
+// taken either side of a failed scrape, most likely from two different
+// processes, so no delta is taken between them whatever the kind. nil means the
+// whole history is one epoch.
+func (s *MetricSeries) ValuesWithDeltas(mode string, epochs []int) []float64 {
 	if mode == "off" {
 		return s.Values
 	}
@@ -73,7 +80,7 @@ func (s *MetricSeries) ValuesWithDeltas(mode string) []float64 {
 	for i := 0; i < lastIdx; i++ {
 		curr := s.Values[i]
 		next := s.Values[i+1]
-		if math.IsNaN(curr) || math.IsNaN(next) || s.isReset(curr, next) {
+		if math.IsNaN(curr) || math.IsNaN(next) || s.isReset(curr, next) || !s.sameEpoch(epochs, i, i+1) {
 			res[i] = math.NaN()
 		} else {
 			res[i] = next - curr
@@ -82,7 +89,7 @@ func (s *MetricSeries) ValuesWithDeltas(mode string) []float64 {
 
 	// Handle the current/last value based on mode
 	if mode == "view" {
-		res[lastIdx] = s.viewSpan()
+		res[lastIdx] = s.viewSpan(epochs)
 	} else {
 		// In "next" mode, last element is absolute
 		res[lastIdx] = s.Values[lastIdx]
@@ -96,16 +103,19 @@ func (s *MetricSeries) ValuesWithDeltas(mode string) []float64 {
 // in the column beside the current one, so leaving it out would make the current
 // column lag a scrape behind the row it sums up.
 //
-// NaN when the window holds fewer than two samples, or when a counter reset
-// anywhere inside it makes the span an artefact of a restart rather than a
-// measurement.
-func (s *MetricSeries) viewSpan() float64 {
+// Only the newest epoch is spanned. Growth across a reconnect would add up two
+// processes' counts, while growth since the reconnect is exactly what is worth
+// knowing right after one.
+//
+// NaN when the span holds fewer than two samples, or when a counter reset
+// inside it makes the span an artefact of a restart rather than a measurement.
+func (s *MetricSeries) viewSpan(epochs []int) float64 {
 	firstIdx, lastPresentIdx := -1, -1
 	for i, v := range s.Values {
 		if math.IsNaN(v) {
 			continue
 		}
-		if firstIdx == -1 {
+		if firstIdx == -1 || !s.sameEpoch(epochs, firstIdx, i) {
 			firstIdx = i
 		} else if s.isReset(s.Values[lastPresentIdx], v) {
 			return math.NaN()
@@ -116,6 +126,24 @@ func (s *MetricSeries) viewSpan() float64 {
 		return math.NaN()
 	}
 	return s.Values[lastPresentIdx] - s.Values[firstIdx]
+}
+
+// sameEpoch reports whether values i and j were scraped in the same epoch.
+// Positions epochs does not reach are treated as matching, so a caller without
+// scrape bookkeeping gets the plain behaviour.
+func (s *MetricSeries) sameEpoch(epochs []int, i, j int) bool {
+	a, okA := epochAt(epochs, len(s.Values), i)
+	b, okB := epochAt(epochs, len(s.Values), j)
+	return !okA || !okB || a == b
+}
+
+// epochAt maps index i of an n-long right-aligned history onto epochs.
+func epochAt(epochs []int, n, i int) (int, bool) {
+	pos := len(epochs) - n + i
+	if pos < 0 || pos >= len(epochs) {
+		return 0, false
+	}
+	return epochs[pos], true
 }
 
 // isReset reports whether the series fell between two samples in a way that can
@@ -219,10 +247,26 @@ func formatBound(bound float64) string {
 	return strconv.FormatFloat(bound, 'g', -1, 64)
 }
 
+// ScrapeInfo describes one successful scrape, which is one column of history.
+type ScrapeInfo struct {
+	Time time.Time
+	// Epoch counts the connection breaks seen before this scrape. Scrapes either
+	// side of a failed fetch land in different epochs: the target most likely
+	// restarted in between, so its values are not continuous across the break.
+	Epoch int
+}
+
 type Store struct {
 	Metrics       map[string]*MetricSeries       // gauge, counter and untyped metrics
 	Distributions map[string]*DistributionSeries // histogram and summary families
 	HistoryLimit  int
+	// Scrapes has one entry per retained column, oldest first. Every series gets
+	// exactly one value per scrape and is pruned alongside, so a series' values
+	// line up with the tail of this slice.
+	Scrapes []ScrapeInfo
+
+	epoch        int
+	breakPending bool
 }
 
 func NewStore(historyLimit int) *Store {
@@ -255,9 +299,58 @@ func GenerateSignature(name string, labels map[string]string) string {
 	return sb.String()
 }
 
-// UpdateFromFamilies updates the store with a fresh batch of metrics.
-// It handles appending new values and filling missing metrics with NaN.
-func (s *Store) UpdateFromFamilies(families map[string]*dto.MetricFamily) {
+// MarkBreak records that a scrape failed. The next successful scrape starts a
+// new epoch; any number of failures in a row count as one break.
+func (s *Store) MarkBreak() {
+	s.breakPending = true
+}
+
+// ScrapeAt returns the scrape offset columns back from the newest (0 = newest).
+func (s *Store) ScrapeAt(offset int) (ScrapeInfo, bool) {
+	idx := len(s.Scrapes) - 1 - offset
+	if offset < 0 || idx < 0 {
+		return ScrapeInfo{}, false
+	}
+	return s.Scrapes[idx], true
+}
+
+// Epochs returns the epochs of the newest n scrapes, oldest first, in the
+// right-aligned form ValuesWithDeltas takes. Fewer come back when fewer are
+// retained.
+func (s *Store) Epochs(n int) []int {
+	if n > len(s.Scrapes) {
+		n = len(s.Scrapes)
+	}
+	epochs := make([]int, n)
+	for i, scrape := range s.Scrapes[len(s.Scrapes)-n:] {
+		epochs[i] = scrape.Epoch
+	}
+	return epochs
+}
+
+// EpochParity is 0 for columns in the newest epoch and alternates 1, 0, 1 for
+// each break further back, which is what the views shade by. Columns with no
+// scrape behind them count as the newest epoch.
+func (s *Store) EpochParity(offset int) int {
+	scrape, ok := s.ScrapeAt(offset)
+	if !ok {
+		return 0
+	}
+	return (s.epoch - scrape.Epoch) % 2
+}
+
+// UpdateFromFamilies updates the store with a fresh batch of metrics scraped at
+// time at. It handles appending new values and filling missing metrics with NaN.
+func (s *Store) UpdateFromFamilies(families map[string]*dto.MetricFamily, at time.Time) {
+	if s.breakPending && len(s.Scrapes) > 0 {
+		s.epoch++
+	}
+	s.breakPending = false
+	s.Scrapes = append(s.Scrapes, ScrapeInfo{Time: at, Epoch: s.epoch})
+	if len(s.Scrapes) > s.HistoryLimit {
+		s.Scrapes = s.Scrapes[1:]
+	}
+
 	seenSignatures := make(map[string]bool)
 
 	for _, family := range families {

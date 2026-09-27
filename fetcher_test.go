@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
@@ -62,7 +63,7 @@ func TestFetchReachesSameStoreOverTextAndProtobuf(t *testing.T) {
 			t.Fatalf("%s: Fetch: %v", name, err)
 		}
 		store := NewStore(10)
-		store.UpdateFromFamilies(families)
+		store.UpdateFromFamilies(families, time.Time{})
 		stores[name] = store
 	}
 
@@ -124,7 +125,7 @@ func TestNativeHistogramYieldsNoBuckets(t *testing.T) {
 		t.Fatalf("Fetch: %v", err)
 	}
 	store := NewStore(10)
-	store.UpdateFromFamilies(families)
+	store.UpdateFromFamilies(families, time.Time{})
 
 	dist := store.Distributions[`latency_seconds{}`]
 	if dist == nil {
@@ -166,7 +167,7 @@ func TestFetchKeepsUTF8MetricNames(t *testing.T) {
 		t.Fatalf("Fetch: %v", err)
 	}
 	store := NewStore(10)
-	store.UpdateFromFamilies(families)
+	store.UpdateFromFamilies(families, time.Time{})
 
 	series := store.Metrics[`requests.total{}`]
 	if series == nil {

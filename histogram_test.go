@@ -32,7 +32,7 @@ func distFromText(t *testing.T, sig string, texts ...string) *DistributionSeries
 	t.Helper()
 	store := NewStore(10)
 	for _, text := range texts {
-		store.UpdateFromFamilies(parseFamilies(t, text))
+		store.UpdateFromFamilies(parseFamilies(t, text), time.Time{})
 	}
 	dist := store.Distributions[sig]
 	if dist == nil {
@@ -102,8 +102,8 @@ lat_seconds_count 0
 
 	// A scrape where the family vanished is all NaN and carries no information.
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, latencyFixture))
-	store.UpdateFromFamilies(parseFamilies(t, "# TYPE other gauge\nother 1\n"))
+	store.UpdateFromFamilies(parseFamilies(t, latencyFixture), time.Time{})
+	store.UpdateFromFamilies(parseFamilies(t, "# TYPE other gauge\nother 1\n"), time.Time{})
 	dist := store.Distributions[`lat_seconds{}`]
 	if got := estimateQuantile(dist, 1, 0.5); got.OK {
 		t.Errorf("NaN scrape produced an estimate %+v", got)
@@ -164,24 +164,24 @@ lat_seconds_count 120
 `
 	dist := distFromText(t, `lat_seconds{}`, latencyFixture, second)
 
-	cumulative := bucketDisplayValues(dist, BucketModeCumulative, DeltaModeOff)
+	cumulative := bucketDisplayValues(dist, BucketModeCumulative, DeltaModeOff, nil)
 	wantCumulative := [][]float64{{20, 25}, {60, 70}, {90, 105}, {100, 120}}
 	assertRows(t, "cumulative", cumulative, wantCumulative)
 
 	// Each band holds only its own observations; +Inf holds those above 1.
-	perBucket := bucketDisplayValues(dist, BucketModePerBucket, DeltaModeOff)
+	perBucket := bucketDisplayValues(dist, BucketModePerBucket, DeltaModeOff, nil)
 	wantPerBucket := [][]float64{{20, 25}, {40, 45}, {30, 35}, {10, 15}}
 	assertRows(t, "per-bucket", perBucket, wantPerBucket)
 
 	// Every band gained 5 observations between the two scrapes. The delta mode
 	// puts that 5 in the column it was earned from and leaves the newest column
 	// absolute, exactly as it does for a scalar metric.
-	perBucketDelta := bucketDisplayValues(dist, BucketModePerBucket, DeltaModeNext)
+	perBucketDelta := bucketDisplayValues(dist, BucketModePerBucket, DeltaModeNext, nil)
 	wantPerBucketDelta := [][]float64{{5, 25}, {5, 45}, {5, 35}, {5, 15}}
 	assertRows(t, "per-bucket with deltas", perBucketDelta, wantPerBucketDelta)
 
 	// The same time transform over the bounds the exporter published.
-	cumulativeDelta := bucketDisplayValues(dist, BucketModeCumulative, DeltaModeNext)
+	cumulativeDelta := bucketDisplayValues(dist, BucketModeCumulative, DeltaModeNext, nil)
 	wantCumulativeDelta := [][]float64{{5, 25}, {10, 70}, {15, 105}, {20, 120}}
 	assertRows(t, "cumulative with deltas", cumulativeDelta, wantCumulativeDelta)
 }
@@ -198,8 +198,8 @@ lat_seconds_bucket{le="+Inf"} 140
 `
 	dist := distFromText(t, `lat_seconds{}`, latencyFixture, second)
 	for _, mode := range []BucketMode{BucketModeCumulative, BucketModePerBucket} {
-		off := bucketDisplayValues(dist, mode, DeltaModeOff)
-		on := bucketDisplayValues(dist, mode, DeltaModeNext)
+		off := bucketDisplayValues(dist, mode, DeltaModeOff, nil)
+		on := bucketDisplayValues(dist, mode, DeltaModeNext, nil)
 		if off[0][0] == on[0][0] {
 			t.Errorf("%v: the oldest column is %v with and without deltas, want the delta mode to reach it",
 				mode, off[0][0])
@@ -219,7 +219,7 @@ lat_seconds_count 15
 	// The delta belongs to the column it was earned from, which is the one before
 	// the restart. Bucket counts are counters, so the drop is blanked rather than
 	// rendered as a large negative number.
-	rows := bucketDisplayValues(dist, BucketModePerBucket, DeltaModeNext)
+	rows := bucketDisplayValues(dist, BucketModePerBucket, DeltaModeNext, nil)
 	for i, row := range rows {
 		if got := row[len(row)-2]; !math.IsNaN(got) {
 			t.Errorf("bucket %d delta across a reset = %v, want no value", i, got)
@@ -240,7 +240,7 @@ lat_seconds_bucket{le="0.5"} 15
 lat_seconds_bucket{le="+Inf"} 22
 `
 	dist := distFromText(t, `lat_seconds{}`, without, with)
-	rows := bucketDisplayValues(dist, BucketModeCumulative, DeltaModeOff)
+	rows := bucketDisplayValues(dist, BucketModeCumulative, DeltaModeOff, nil)
 	if len(rows) != 3 {
 		t.Fatalf("got %d rows, want 3", len(rows))
 	}
@@ -253,7 +253,7 @@ lat_seconds_bucket{le="+Inf"} 22
 	}
 
 	// Decumulation must not treat the absent bucket as a baseline of zero.
-	perBucket := bucketDisplayValues(dist, BucketModePerBucket, DeltaModeOff)
+	perBucket := bucketDisplayValues(dist, BucketModePerBucket, DeltaModeOff, nil)
 	if got := perBucket[2][0]; got != 10 {
 		t.Errorf("+Inf band at the first scrape = %v, want 20-10=10", got)
 	}
@@ -266,7 +266,7 @@ lat_seconds_bucket{le="+Inf"} 120
 lat_seconds_count 120
 `
 	dist := distFromText(t, `lat_seconds{}`, latencyFixture, second)
-	stats := distSummary(dist, 1, 5*time.Second)
+	stats := distSummary(dist, 1, nil, 5*time.Second)
 
 	if !stats.CountOK || stats.Count != 120 {
 		t.Errorf("count = %v (ok=%v), want 120", stats.Count, stats.CountOK)
@@ -285,7 +285,7 @@ lat_seconds_bucket{le="+Inf"} 15
 lat_seconds_count 15
 `
 	dist := distFromText(t, `lat_seconds{}`, latencyFixture, restarted)
-	if stats := distSummary(dist, 1, 5*time.Second); stats.RateOK {
+	if stats := distSummary(dist, 1, nil, 5*time.Second); stats.RateOK {
 		t.Errorf("rate = %v across a counter reset, want none", stats.Rate)
 	}
 }
@@ -298,13 +298,40 @@ lat_seconds_bucket{le="+Inf"} 140
 lat_seconds_count 140
 `
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, latencyFixture))
-	store.UpdateFromFamilies(parseFamilies(t, "# TYPE other gauge\nother 1\n"))
-	store.UpdateFromFamilies(parseFamilies(t, third))
+	store.UpdateFromFamilies(parseFamilies(t, latencyFixture), time.Time{})
+	store.UpdateFromFamilies(parseFamilies(t, "# TYPE other gauge\nother 1\n"), time.Time{})
+	store.UpdateFromFamilies(parseFamilies(t, third), time.Time{})
 
-	stats := distSummary(store.Distributions[`lat_seconds{}`], 2, 5*time.Second)
+	stats := distSummary(store.Distributions[`lat_seconds{}`], 2, nil, 5*time.Second)
 	if !stats.RateOK || math.Abs(stats.Rate-4) > 1e-9 {
 		t.Errorf("rate = %v (ok=%v), want 40 observations over 10s", stats.Rate, stats.RateOK)
+	}
+}
+
+// With a scrape log the rate is taken over the real time between scrapes, so a
+// paused or slow stretch does not inflate it.
+func TestDistSummaryRateUsesScrapeTimes(t *testing.T) {
+	const second = `# TYPE lat_seconds histogram
+lat_seconds_bucket{le="+Inf"} 120
+lat_seconds_count 120
+`
+	dist := distFromText(t, `lat_seconds{}`, latencyFixture, second)
+	scrapes := []ScrapeInfo{{Time: time.Unix(100, 0)}, {Time: time.Unix(110, 0)}}
+	stats := distSummary(dist, 1, scrapes, 5*time.Second)
+	if !stats.RateOK || math.Abs(stats.Rate-2) > 1e-9 {
+		t.Errorf("rate = %v (ok=%v), want 20 observations over the 10s between scrapes", stats.Rate, stats.RateOK)
+	}
+}
+
+func TestDistSummaryReportsNoRateAcrossAConnectionBreak(t *testing.T) {
+	const second = `# TYPE lat_seconds histogram
+lat_seconds_bucket{le="+Inf"} 120
+lat_seconds_count 120
+`
+	dist := distFromText(t, `lat_seconds{}`, latencyFixture, second)
+	scrapes := []ScrapeInfo{{Time: time.Unix(100, 0), Epoch: 0}, {Time: time.Unix(110, 0), Epoch: 1}}
+	if stats := distSummary(dist, 1, scrapes, 5*time.Second); stats.RateOK {
+		t.Errorf("rate = %v across a connection break, want none", stats.Rate)
 	}
 }
 

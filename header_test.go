@@ -35,7 +35,7 @@ func headerModel(t *testing.T, width int, texts ...string) model {
 	t.Helper()
 	store := NewStore(10)
 	for _, text := range texts {
-		store.UpdateFromFamilies(parseFamilies(t, text))
+		store.UpdateFromFamilies(parseFamilies(t, text), time.Time{})
 	}
 
 	input := textinput.New()

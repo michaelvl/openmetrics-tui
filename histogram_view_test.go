@@ -38,7 +38,7 @@ func distModel(t *testing.T, width int, texts ...string) model {
 	t.Helper()
 	store := NewStore(10)
 	for _, text := range texts {
-		store.UpdateFromFamilies(parseFamilies(t, text))
+		store.UpdateFromFamilies(parseFamilies(t, text), time.Time{})
 	}
 	m := model{
 		cfg: Config{
@@ -136,7 +136,7 @@ func TestCollapsedLineWorksForANativeHistogram(t *testing.T) {
 				},
 			}},
 		},
-	})
+	}, time.Time{})
 
 	m := distModel(t, 120)
 	m.store = store
@@ -286,7 +286,7 @@ func TestBucketModeCyclesBackToWhereItStarted(t *testing.T) {
 func TestViewToggleIsARoundTrip(t *testing.T) {
 	m := distModel(t, 120, threeFamilies)
 	m.view = ViewMetrics
-	m.store.UpdateFromFamilies(parseFamilies(t, "# TYPE g gauge\ng 1\n"))
+	m.store.UpdateFromFamilies(parseFamilies(t, "# TYPE g gauge\ng 1\n"), time.Time{})
 	m.refresh()
 
 	m.toggleView()
@@ -475,11 +475,11 @@ lat_seconds_count 501
 	if quiet == loud {
 		t.Fatal("the quiet and busy buckets rendered identically")
 	}
-	if shadeFor(1, 499) == shadeFor(499, 499) {
+	if shadeFor(1, 499, false) == shadeFor(499, 499, false) {
 		t.Error("one observation and 499 landed on the same ramp step")
 	}
 	// An empty band must recede rather than claim the darkest step.
-	if shadeFor(0, 499) != nil {
+	if shadeFor(0, 499, false) != nil {
 		t.Error("an empty bucket should not be shaded at all")
 	}
 }
@@ -506,7 +506,7 @@ func TestNativeHistogramExplainsTheEmptyGrid(t *testing.T) {
 				},
 			}},
 		},
-	})
+	}, time.Time{})
 
 	m := distModel(t, 120)
 	m.store = store

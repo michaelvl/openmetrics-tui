@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
+	"github.com/charmbracelet/x/ansi"
 	dto "github.com/prometheus/client_model/go"
 )
 
@@ -98,9 +99,26 @@ type model struct {
 	editing  headerField
 	input    textinput.Model
 	inputErr string
+
+	// snapshotMsg reports the outcome of the last S press, in the footer's left
+	// segment until snapshotGen moves on. snapshotGen numbers it the same way
+	// tickGen numbers the tick chain, so a save that happens while an older
+	// save's timer is still running cannot have its message cleared early.
+	snapshotMsg string
+	snapshotErr bool
+	snapshotGen int
 }
 
 type tickMsg struct{ gen int }
+
+// clearSnapshotMsg clears the footer's save confirmation or error after
+// snapshotMsgDuration, independently of the scrape interval - a long interval
+// must not leave a three-second-old message on screen indefinitely.
+type clearSnapshotMsg struct{ gen int }
+
+// snapshotMsgDuration is how long a save confirmation or error stays in the
+// footer.
+const snapshotMsgDuration = 3 * time.Second
 
 // intervalSteps is the ladder + and - move the scrape interval along.
 var intervalSteps = []time.Duration{
@@ -314,6 +332,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cfg.HideStatic = !m.cfg.HideStatic
 			m.refresh()
 			return m, nil
+		case "S":
+			return m, m.saveSnapshot()
 		case "v":
 			m.toggleView()
 			return m, nil
@@ -362,6 +382,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
 		}
+	case clearSnapshotMsg:
+		if msg.gen == m.snapshotGen {
+			m.snapshotMsg = ""
+		}
+		return m, nil
 	case tickMsg:
 		if msg.gen != m.tickGen {
 			// A tick from before the interval changed; its chain ends here.
@@ -591,10 +616,56 @@ func (m model) View() string {
 		return "Initializing..."
 	}
 
+	output := m.renderScreen()
+	if m.showHelp {
+		output = m.renderHelpOverlay(output)
+	}
+
+	return output
+}
+
+// renderScreen draws the header, the viewport's currently visible slice and
+// the footer - exactly what is on screen, minus the help overlay.
+func (m model) renderScreen() string {
+	return m.renderHeader() + "\n" + m.viewport.View() + "\n" + m.renderFooter(m.liveScrollHints())
+}
+
+// liveScrollHints reports which arrows belong in a live footer, based on the
+// viewport's actual scroll position.
+func (m model) liveScrollHints() string {
+	scrollHintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Faint(true)
+	switch {
+	case !m.viewport.AtTop() && !m.viewport.AtBottom():
+		return scrollHintStyle.Render(" ▲▼")
+	case !m.viewport.AtTop():
+		return scrollHintStyle.Render(" ▲")
+	case !m.viewport.AtBottom():
+		return scrollHintStyle.Render(" ▼")
+	}
+	return ""
+}
+
+// snapshotContent returns the current view's whole content - every row,
+// unclipped by the viewport's height, as if the terminal were infinitely
+// tall. Column and grid widths are untouched, so history columns are still
+// capped to whatever the terminal is wide enough to hold, exactly as on
+// screen: only the height limit is lifted, not the width one.
+func (m model) snapshotContent() string {
+	if m.view != ViewDistributions {
+		return m.buildTable()
+	}
+	content, _ := m.renderDistributions()
+	return content
+}
+
+// renderFooter builds the one-line footer shared by a live render and a
+// snapshot. scrollHints is passed in rather than computed here because a
+// snapshot has nothing scrolled off screen to hint at - it lists everything -
+// so it always passes none.
+func (m model) renderFooter(scrollHints string) string {
 	// Build status indicator (URL with connection status)
 	connectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("71")) // dimmer green
 	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))    // red
-	scrollHintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Faint(true)
 
 	// Build delta status first to measure it
 	deltasStatus := "Off"
@@ -641,16 +712,6 @@ func (m model) View() string {
 		hideStaticStatus = " | " + hideStaticStyle.Render("Static: Hidden")
 	}
 
-	// Build scroll hints
-	var scrollHints string
-	if !m.viewport.AtTop() && !m.viewport.AtBottom() {
-		scrollHints = scrollHintStyle.Render(" ▲▼")
-	} else if !m.viewport.AtTop() {
-		scrollHints = scrollHintStyle.Render(" ▲")
-	} else if !m.viewport.AtBottom() {
-		scrollHints = scrollHintStyle.Render(" ▼")
-	}
-
 	safetyMargin := 3
 	fixedSeparator := " | "
 
@@ -677,10 +738,19 @@ func (m model) View() string {
 	}
 
 	// The footer's left segment doubles as the edit hint, because the header is a
-	// fixed height with no room for one.
+	// fixed height with no room for one. A snapshot result takes the same spot
+	// when neither is true - it is short-lived, so it never competes with an
+	// open header box for the room.
 	leftSegment := "? for help"
-	if editing {
+	switch {
+	case editing:
 		leftSegment = m.headerHint(m.width - fixedWidth - safetyMargin - statusReserveWhileEdit)
+	case m.snapshotMsg != "":
+		style := lipgloss.NewStyle().Faint(true)
+		if m.snapshotErr {
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+		}
+		leftSegment = style.Render(truncateToWidth(m.snapshotMsg, max(m.width-fixedWidth-safetyMargin-statusReserveWhileEdit, minHintWidth)))
 	}
 
 	// Whatever the rest of the line does not want. This used to be floored at a
@@ -729,13 +799,38 @@ func (m model) View() string {
 		footer = fmt.Sprintf("%s | %s%s", leftSegment, statusIndicator, scrollHints)
 	}
 
-	// Show help popup if toggled
-	output := m.renderHeader() + "\n" + m.viewport.View() + "\n" + footer
-	if m.showHelp {
-		output = m.renderHelpOverlay(output)
+	return footer
+}
+
+// saveSnapshot writes the header, every row the current filters admit - not
+// just the rows currently scrolled into view - and the footer to a timestamped
+// plain-text file in the working directory, with colour codes stripped. It
+// exists so a screen can be handed to an agent as text instead of an image;
+// see README-AGENT-CONSUMERS.md for how to read the result, including what
+// the missing colour would otherwise have said.
+func (m *model) saveSnapshot() tea.Cmd {
+	m.snapshotGen++
+	gen := m.snapshotGen
+
+	now := time.Now()
+	path := fmt.Sprintf("openmetrics-tui-snapshot-%s.txt", now.Format("20060102-150405"))
+	preamble := fmt.Sprintf(
+		"# openmetrics-tui snapshot, taken %s\n# Colour is stripped from this file - see README-AGENT-CONSUMERS.md\n# for how to read it without it.\n\n",
+		now.Format(time.RFC3339))
+	screen := m.renderHeader() + "\n" + m.snapshotContent() + "\n" + m.renderFooter("")
+	content := ansi.Strip(screen)
+
+	if err := os.WriteFile(path, []byte(preamble+content+"\n"), 0o644); err != nil {
+		m.snapshotMsg = "snapshot failed: " + err.Error()
+		m.snapshotErr = true
+	} else {
+		m.snapshotMsg = "saved " + path
+		m.snapshotErr = false
 	}
 
-	return output
+	return tea.Tick(snapshotMsgDuration, func(time.Time) tea.Msg {
+		return clearSnapshotMsg{gen: gen}
+	})
 }
 
 // truncateMessage truncates a message to maxLen, adding "..." if truncated
@@ -760,6 +855,7 @@ Help
   p           Pause/unpause updates
   +/-         Scrape faster / slower
   s           Toggle hiding static (unchanging) metrics
+  S           Save the current screen to a plain-text snapshot file
   v           Switch between metrics and distributions
   m           Edit the metric-name filter
   f           Edit the label filter (k=v,k!=v,k=~re - all must match)

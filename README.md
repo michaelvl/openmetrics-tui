@@ -5,51 +5,21 @@ simple alternative to `watch 'curl http://... | grep metric_*`' workflows.
 
 Metrics view:
 
-![Screenshow-metrics](docs/screen1.png)
+![Screenshot-metrics](docs/screen1.png)
 
 Distributions view:
 
-![Screenshow-distributions](docs/screen2.png)
+![Screenshot-distributions](docs/screen2.png)
 
-Handing the screen to an AI agent? Press `S` to save a plain-text snapshot -
-see [Plain-text snapshots](#plain-text-snapshots) below - and pass it along
-with [README-AGENT-CONSUMERS.md](README-AGENT-CONSUMERS.md), which explains
-the columns, colors and footer in enough detail that it won't mistake a
-filtered-out or aggregated-away metric for a zero value.
+Scrape epochs, after the target dropped out and came back (different colour for
+each epoc):
 
-## Plain-text snapshots
+![Screenshot-epochs](docs/screen3.png)
 
-Press `S` (shift-s; lowercase `s` is the unrelated hide-static toggle) to
-save the current view to `openmetrics-tui-snapshot-<timestamp>.txt` in the
-working directory. This is the preferred way to hand a screen to an AI agent
-instead of an image screenshot - it carries exact numbers with no risk of
-OCR misreading them.
-
-A snapshot captures whichever view is on screen - the Metrics table or the
-Distributions accordion - under whatever filters, aggregation, delta mode
-and bucket mode are currently active, with colour escape codes stripped.
-
-Unlike an actual screenshot, it is not clipped to the terminal's height: it
-lists every row the current filters admit, as if the terminal were
-infinitely tall. Width is still capped, though - the number of history or
-grid columns is limited to whatever the terminal was wide enough to show at
-the time, exactly as on screen. If a distribution family was zoomed (`enter`
-pressed twice), the snapshot captures only that family full-screen, since
-zoom is a deliberate focus rather than a height limitation.
-
-The file opens with a short preamble:
-
-```
-# openmetrics-tui snapshot, taken 2026-09-30T15:57:37Z
-# Colour is stripped from this file - see README-AGENT-CONSUMERS.md
-# for how to read it without it.
-```
-
-That timestamp is the wall-clock moment the snapshot was taken - the column
-headers inside the file are still relative ages (`-45s`, `Curr`, ...),
-measured from it. The footer briefly echoes `saved <path>` (or a `snapshot
-failed: ...` error) in place of `? for help`, clearing itself again after a
-few seconds.
+Handing the screen to an AI agent? Press `S` to save a plain-text snapshot - see
+[Plain-text snapshots](#plain-text-snapshots) below - and pass it along with
+[README-AGENT-CONSUMERS.md](README-AGENT-CONSUMERS.md), which explains the
+columns, colors and footer in detail.
 
 ## Filtering and aggregation
 
@@ -176,3 +146,58 @@ Deltas: Off                    10   14    20         10   14    20   le=0.1
 
                           Buckets: Cumulative    Buckets: Per bucket
 ```
+
+## Scrape epochs
+
+A failed scrape marks a break in the history, and the next successful scrape
+starts a new _epoch_. That usually means the target restarted, so the values on
+either side of the break come from two different processes. They shouldn't be
+read as one continuous series.
+
+Columns from before the most recent break are drawn in muted colours:
+grey-lavender for raw values and muted orange for deltas. The newest epoch
+always keeps the normal colours. If there's more than one break in the retained
+history, the shading alternates at each one going back. In the
+[epochs screenshot](docs/screen3.png), the column-header ages also jump from
+`-20s` to `-10s`, which is where the break happened.
+
+Deltas never cross a break, whatever the metric kind:
+
+- In `Δ Next`, the column right before the break gets no delta, because the two
+  samples next to it belong to different epochs.
+- In `Δ View`, the current column only covers the newest epoch. It shows growth
+  since the reconnect, not the two processes' counts added together.
+
+## Plain-text snapshots
+
+Press `S` (shift-s; lowercase `s` is the unrelated hide-static toggle) to save
+the current view to `openmetrics-tui-snapshot-<timestamp>.txt` in the working
+directory. This is the preferred way to hand a screen to an AI agent instead of
+an image screenshot - it carries exact numbers with no risk of OCR misreading
+them.
+
+A snapshot captures whichever view is on screen - the Metrics table or the
+Distributions accordion - under whatever filters, aggregation, delta mode and
+bucket mode are currently active, with colour escape codes stripped.
+
+Unlike an actual screenshot, it is not clipped to the terminal's height: it
+lists every row the current filters admit, as if the terminal were infinitely
+tall. Width is still capped, though - the number of history or grid columns is
+limited to whatever the terminal was wide enough to show at the time, exactly as
+on screen. If a distribution family was zoomed (`enter` pressed twice), the
+snapshot captures only that family full-screen, since zoom is a deliberate focus
+rather than a height limitation.
+
+The file opens with a short preamble:
+
+```
+# openmetrics-tui snapshot, taken 2026-09-30T15:57:37Z
+# Colour is stripped from this file - see README-AGENT-CONSUMERS.md
+# for how to read it without it.
+```
+
+That timestamp is the wall-clock moment the snapshot was taken - the column
+headers inside the file are still relative ages (`-45s`, `Curr`, ...), measured
+from it. The footer briefly echoes `saved <path>` (or a `snapshot
+failed: ...`
+error) in place of `? for help`, clearing itself again after a few seconds.

@@ -21,6 +21,31 @@ Handing the screen to an AI agent? Press `S` to save a plain-text snapshot - see
 [README-AGENT-CONSUMERS.md](README-AGENT-CONSUMERS.md), which explains the
 columns, colors and footer in detail.
 
+## Installation
+
+With Nix (flakes enabled):
+
+```sh
+nix run github:michaelvl/openmetrics-tui -- -url http://localhost:9100/metrics
+nix profile install github:michaelvl/openmetrics-tui
+```
+
+With devbox:
+
+```sh
+devbox add github:michaelvl/openmetrics-tui
+```
+
+On NixOS, add the flake as an input and include
+`inputs.openmetrics-tui.packages.${pkgs.system}.default` in
+`environment.systemPackages`.
+
+With Go:
+
+```sh
+go install github.com/michaelvl/openmetrics-tui@latest
+```
+
 ## Filtering and aggregation
 
 Metrics can be filtered on metric name and labels and be aggregated on labels.

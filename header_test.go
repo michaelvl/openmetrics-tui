@@ -387,7 +387,7 @@ func TestHeaderShowsTheFiltersInForce(t *testing.T) {
 	m.cfg.FilterLabel = "env=prod"
 
 	got := plain(m.renderHeader())
-	for _, want := range []string{"Metric:", "queue_.*", "Label:", "env=prod", "Aggregation:"} {
+	for _, want := range []string{"┤ Metric ├", "queue_.*", "┤ Label ├", "env=prod", "┤ Aggregation ├"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("header is missing %q:\n%s", want, got)
 		}

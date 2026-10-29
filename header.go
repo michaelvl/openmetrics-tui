@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -188,11 +189,12 @@ func headerBoxWidths(total, n int) []int {
 	return widths
 }
 
-// renderHeaderBox draws one box at an exact outer width. The caption lives
-// inside the box rather than in its top border, because lipgloss has no
-// border-title API. Every path through here produces exactly one content line:
-// a line that overflows would wrap and push the viewport down a row, which is
-// the one thing the header must never do.
+// renderHeaderBox draws one box at an exact outer width, with the caption set
+// into its top border as a legend. lipgloss has no border-title API, so the top
+// edge is drawn by hand and the rest of the box by lipgloss with its top border
+// switched off. Every path through here produces exactly one content line: a
+// line that overflows would wrap and push the viewport down a row, which is the
+// one thing the header must never do.
 func (m model) renderHeaderBox(field headerField, width int) string {
 	focused := m.editing == field
 
@@ -209,29 +211,17 @@ func (m model) renderHeaderBox(field headerField, width int) string {
 		inner = 1
 	}
 
-	// The caption shortens, then goes entirely, as the terminal narrows past the
-	// point where it and a useful amount of the value both fit.
-	caption := field.caption() + ": "
-	if inner-lipgloss.Width(caption) < minValueWidth {
-		caption = field.shortCaption() + ": "
-	}
-	valueWidth := inner - lipgloss.Width(caption)
-	if valueWidth < minValueWidth {
-		caption = ""
-		valueWidth = inner
-	}
-
 	var value string
 	if focused {
 		// textinput spends one column on the cursor, and re-measures its own
 		// scroll window only when the cursor moves.
-		m.input.Width = max(1, valueWidth-1)
+		m.input.Width = max(1, inner-1)
 		m.input.SetCursor(m.input.Position())
 		value = m.input.View()
 	} else if raw := m.fieldValue(field); raw == "" {
-		value = lipgloss.NewStyle().Faint(true).Render(truncateToWidth("—", valueWidth))
+		value = lipgloss.NewStyle().Faint(true).Render(truncateToWidth("—", inner))
 	} else {
-		value = truncateToWidth(raw, valueWidth)
+		value = truncateToWidth(raw, inner)
 	}
 
 	captionStyle := lipgloss.NewStyle().Faint(true)
@@ -239,17 +229,38 @@ func (m model) renderHeaderBox(field headerField, width int) string {
 		captionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
 	}
 
-	return lipgloss.NewStyle().
+	top := headerBoxTop(field, inner, lipgloss.NewStyle().Foreground(border), captionStyle)
+	body := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
+		BorderTop(false).
 		BorderForeground(border).
 		Width(inner).
-		MaxHeight(headerHeight).
-		Render(captionStyle.Render(caption) + value)
+		MaxHeight(headerHeight - 1).
+		Render(value)
+	return top + "\n" + body
 }
 
-// minValueWidth is the narrowest value worth keeping a caption for. Below it the
-// caption would crowd out the thing it labels.
-const minValueWidth = 4
+// headerBoxTop draws a box's top border with the caption set into it, as in
+// ╭─┤ Metric ├──────╮. The caption shortens, then goes entirely, as the box
+// narrows past the point where it fits with some border left either side.
+func headerBoxTop(field headerField, inner int, borderStyle, captionStyle lipgloss.Style) string {
+	b := lipgloss.RoundedBorder()
+	// "─┤ " before the caption, " ├" after it, and at least one "─" to close.
+	const legendOverhead = 6
+
+	caption := field.caption()
+	if inner-lipgloss.Width(caption) < legendOverhead {
+		caption = field.shortCaption()
+	}
+	if inner-lipgloss.Width(caption) < legendOverhead {
+		return borderStyle.Render(b.TopLeft + strings.Repeat(b.Top, inner) + b.TopRight)
+	}
+
+	fill := inner - lipgloss.Width(caption) - legendOverhead + 1
+	return borderStyle.Render(b.TopLeft+b.Top+"┤ ") +
+		captionStyle.Render(caption) +
+		borderStyle.Render(" ├"+strings.Repeat(b.Top, fill)+b.TopRight)
+}
 
 // truncateToWidth cuts a string to at most width display cells, marking the cut
 // with an ellipsis. Unlike truncateMessage, which the footer uses, it honours

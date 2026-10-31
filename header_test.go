@@ -627,3 +627,34 @@ func TestLabelModeTogglesToHideAllFromTheDefaultMode(t *testing.T) {
 		t.Errorf("LabelMode = %q, want all", m.cfg.LabelMode)
 	}
 }
+
+// The table's bottom border counts the rows shown against the series scraped,
+// so a filter that hides most of them says so without the reader counting.
+func TestTableBottomBorderCountsShownMetrics(t *testing.T) {
+	m := headerModel(t, 80, fourGauges)
+	if got := lastLine(plain(m.buildTable())); !strings.Contains(got, "┤ 4/4 ├─╯") {
+		t.Errorf("unfiltered bottom border = %q, want it to end ┤ 4/4 ├─╯", got)
+	}
+
+	m.cfg.FilterLabel = "env=dev"
+	if got := lastLine(plain(m.buildTable())); !strings.Contains(got, "┤ 2/4 ├─╯") {
+		t.Errorf("filtered bottom border = %q, want it to end ┤ 2/4 ├─╯", got)
+	}
+}
+
+// The legend sits in the corner even where that means drawing over column
+// junctions, and is left out of a table too narrow to hold it.
+func TestCountLegendSitsInTheCorner(t *testing.T) {
+	table := "╭─┬─╮\n╰─┴─╯"
+	if got := withCountLegend(table, 1, 2, lipgloss.NewStyle()); got != table {
+		t.Errorf("narrow table changed to %q", got)
+	}
+
+	table = "╭─────┬──┬──╮\n╰─────┴──┴──╯"
+	got := lastLine(plain(withCountLegend(table, 1, 2, lipgloss.NewStyle())))
+	if want := "╰───┤ 1/2 ├─╯"; got != want {
+		t.Errorf("bottom border = %q, want %q", got, want)
+	}
+}
+
+func lastLine(s string) string { return s[strings.LastIndex(s, "\n")+1:] }

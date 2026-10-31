@@ -1271,11 +1271,38 @@ func (m model) buildTable() string {
 	// Create table
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
-		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("240"))).
+		BorderStyle(tableBorderStyle).
 		Headers(headers...).
 		Rows(rows...)
 
-	return t.Render()
+	return withCountLegend(t.Render(), len(filteredSeries), len(m.store.Metrics), tableBorderStyle)
+}
+
+var tableBorderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+// withCountLegend sets "┤ shown/total ├" into the right-hand corner of a
+// table's bottom border, the way the header boxes carry their captions in the
+// top one. The value columns are narrow, so it draws over their junctions
+// rather than drift left to find plain border; a table too narrow to hold it
+// goes without.
+func withCountLegend(table string, shown, total int, borderStyle lipgloss.Style) string {
+	nl := strings.LastIndex(table, "\n")
+	if nl < 0 {
+		return table
+	}
+	b := lipgloss.RoundedBorder()
+	bottom := []rune(ansi.Strip(table[nl+1:]))
+	count := fmt.Sprintf("%d/%d", shown, total)
+
+	// "─┤ ", the count, " ├─" and the closing corner, all one cell a rune.
+	start := len(bottom) - 3 - len(count) - 3 - 1
+	if start < 1 {
+		return table
+	}
+	line := borderStyle.Render(string(bottom[:start])+b.Bottom+"┤ ") +
+		lipgloss.NewStyle().Faint(true).Render(count) +
+		borderStyle.Render(" ├"+b.Bottom+string(bottom[len(bottom)-1]))
+	return table[:nl+1] + line
 }
 
 func parseFlags() Config {

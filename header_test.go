@@ -401,11 +401,11 @@ func TestResizeReservesTheHeadersRows(t *testing.T) {
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	m = next.(model)
 
-	if want := 40 - headerHeight - 2; m.viewport.Height != want {
+	if want := 40 - headerHeight - 1; m.viewport.Height != want {
 		t.Errorf("viewport height = %d, want %d", m.viewport.Height, want)
 	}
-	if lipgloss.Height(m.View()) > 40 {
-		t.Errorf("view is %d rows, want at most 40", lipgloss.Height(m.View()))
+	if lipgloss.Height(m.View()) != 40 {
+		t.Errorf("view is %d rows, want exactly 40", lipgloss.Height(m.View()))
 	}
 }
 

@@ -223,7 +223,7 @@ func main() {
 		input:      input,
 	}
 
-	if _, err := tea.NewProgram(m).Run(); err != nil {
+	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Printf("Error running program: %v\n", err)
 		os.Exit(1)
 	}
@@ -428,8 +428,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 		// Initialize or resize viewport
-		// Reserve the header's rows plus 2 lines: 1 for footer, 1 safety margin
-		viewportHeight := msg.Height - headerHeight - 2
+		// Reserve the header's rows plus 1 line for the footer. The view then fills
+		// the terminal exactly, so the shell line that launched the tool scrolls off.
+		viewportHeight := msg.Height - headerHeight - 1
 		if viewportHeight < 1 {
 			viewportHeight = 1
 		}

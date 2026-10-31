@@ -678,22 +678,23 @@ func (m model) renderFooter(scrollHints string) string {
 
 	// The scrape interval, which + and - change. It sits just before the
 	// endpoint, since it says how often that endpoint is scraped.
-	intervalStatus := "⟳ " + formatAge(m.cfg.Interval) + " | "
+	intervalStatus := "⟳ " + formatAge(m.cfg.Interval) + " (+/-) | "
 
 	// Build pause status
 	var pauseStatus string
 	if m.isPaused {
 		pauseStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Bold(true)
-		pauseStatus = " | " + pauseStyle.Render("⏸  PAUSED")
+		pauseStatus = " | " + pauseStyle.Render("⏸  PAUSED (p)")
 	}
 
 	// Build the view indicator. It names the key as well as the view, because it
 	// is the only place the second view is advertised outside the help overlay.
+	// Like every footer segment a key changes, the key trails in parentheses.
 	viewName := "Metrics"
 	if m.view == ViewDistributions {
 		viewName = "Distributions"
 	}
-	viewStatus := lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Render("v: " + viewName)
+	viewStatus := lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Render(viewName + " (v)")
 
 	// Build the bucket-mode status. It rides beside the delta mode because the
 	// two are the display's two axes - this one within a scrape, that one across
@@ -702,14 +703,14 @@ func (m model) renderFooter(scrollHints string) string {
 	// means something, which also keeps the footer short everywhere else.
 	var bucketStatus string
 	if m.view == ViewDistributions {
-		bucketStatus = " | Buckets: " + m.bucketMode.String()
+		bucketStatus = " | Buckets (b): " + m.bucketMode.String()
 	}
 
 	// Build hide-static status
 	var hideStaticStatus string
 	if m.cfg.HideStatic {
 		hideStaticStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-		hideStaticStatus = " | " + hideStaticStyle.Render("Static: Hidden")
+		hideStaticStatus = " | " + hideStaticStyle.Render("Static: Hidden (s)")
 	}
 
 	safetyMargin := 3
@@ -728,7 +729,7 @@ func (m model) renderFooter(scrollHints string) string {
 		lipgloss.Width(scrollHints) +
 		lipgloss.Width("● ") // Approximate icon width
 	if !editing {
-		fixedWidth += lipgloss.Width(" |  | Deltas: ") +
+		fixedWidth += lipgloss.Width(" |  | Deltas (d): ") +
 			lipgloss.Width(viewStatus) +
 			lipgloss.Width(deltasStatus) +
 			lipgloss.Width(bucketStatus) +
@@ -793,7 +794,7 @@ func (m model) renderFooter(scrollHints string) string {
 		statusIndicator = lipgloss.NewStyle().Faint(true).Render("● ") + url
 	}
 
-	footer := fmt.Sprintf("%s | %s | Deltas: %s%s%s%s | %s%s%s",
+	footer := fmt.Sprintf("%s | %s | Deltas (d): %s%s%s%s | %s%s%s",
 		leftSegment, viewStatus, deltasStatus, bucketStatus, pauseStatus, hideStaticStatus, intervalStatus, statusIndicator, scrollHints)
 	if editing {
 		footer = fmt.Sprintf("%s | %s%s", leftSegment, statusIndicator, scrollHints)

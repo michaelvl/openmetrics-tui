@@ -33,9 +33,9 @@ var editableFields = []headerField{fieldMetricFilter, fieldLabelFilter, fieldAgg
 func (f headerField) caption() string {
 	switch f {
 	case fieldMetricFilter:
-		return "Metric"
+		return "Metric filter"
 	case fieldLabelFilter:
-		return "Label"
+		return "Label filter"
 	case fieldAggregation:
 		return "Aggregation"
 	}
@@ -43,13 +43,37 @@ func (f headerField) caption() string {
 }
 
 // shortCaption is what a box falls back to when its third of the terminal is too
-// narrow for the full caption. Only the aggregation box is long enough to need
-// one; for the others it is the caption itself.
+// narrow for the full caption.
 func (f headerField) shortCaption() string {
-	if f == fieldAggregation {
+	switch f {
+	case fieldMetricFilter:
+		return "Metric"
+	case fieldLabelFilter:
+		return "Label"
+	case fieldAggregation:
 		return "Agg"
 	}
-	return f.caption()
+	return ""
+}
+
+// key is the global key that opens the field. The box's title advertises it,
+// trailing in parentheses, so the header doubles as a reminder of how to reach
+// it without the help overlay.
+func (f headerField) key() string {
+	switch f {
+	case fieldMetricFilter:
+		return "m"
+	case fieldLabelFilter:
+		return "f"
+	case fieldAggregation:
+		return "a"
+	}
+	return ""
+}
+
+// withKey appends the field's key to a caption, as in "Metric filter (m)".
+func (f headerField) withKey(caption string) string {
+	return caption + " (" + f.key() + ")"
 }
 
 // step moves delta places along the tab order, wrapping at both ends so tab
@@ -241,16 +265,17 @@ func (m model) renderHeaderBox(field headerField, width int) string {
 }
 
 // headerBoxTop draws a box's top border with the caption set into it, as in
-// ╭─┤ Metric ├──────╮. The caption shortens, then goes entirely, as the box
-// narrows past the point where it fits with some border left either side.
+// ╭─┤ Metric filter (m) ├──────╮. The caption shortens, keeping the key, then
+// goes entirely, as the box narrows past the point where it fits with some
+// border left either side.
 func headerBoxTop(field headerField, inner int, borderStyle, captionStyle lipgloss.Style) string {
 	b := lipgloss.RoundedBorder()
 	// "─┤ " before the caption, " ├" after it, and at least one "─" to close.
 	const legendOverhead = 6
 
-	caption := field.caption()
+	caption := field.withKey(field.caption())
 	if inner-lipgloss.Width(caption) < legendOverhead {
-		caption = field.shortCaption()
+		caption = field.withKey(field.shortCaption())
 	}
 	if inner-lipgloss.Width(caption) < legendOverhead {
 		return borderStyle.Render(b.TopLeft + strings.Repeat(b.Top, inner) + b.TopRight)

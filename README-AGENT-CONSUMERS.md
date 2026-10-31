@@ -28,7 +28,7 @@ colour-coded cues below need a substitute:
 | Colour cue (real terminal) | What to read instead, without colour |
 |---|---|
 | Magenta current value vs. plain historical value | The `Curr` column header already identifies which column is current |
-| Orange delta text | The footer's `Deltas:` line states the mode, and every delta cell already carries an explicit `+`/`-` sign in the text itself |
+| Orange delta text | The footer's `Deltas (d):` line states the mode, and every delta cell already carries an explicit `+`/`-` sign in the text itself |
 | Grey-lavender / muted-orange "older epoch" shading | Look for an uneven jump in the column-header ages instead (see below) — that's the same underlying event (a connection break) that the colour was marking |
 | Distribution heatmap shading (blue/cyan ramp) | No information is lost — every cell's exact number is printed either way; shading was only a shape-at-a-glance affordance, not the only source of the value |
 | Highlighted cursor row (distributions view) | Not recoverable — plain text carries no indication of which row the cursor was on. Don't assume any particular row is "selected" |
@@ -45,11 +45,11 @@ relative ages (`-45s`, `Curr`, ...) are measured from.
 
 ```
 +-- header: three boxes --------------------------------------------------+
-| Metric: <regex>  |  Label: <clauses>  |  Aggregation: <spec>            |
+| Metric filter (m): <regex> | Label filter (f): <clauses> | Agg (a): ... |
 +-- viewport: Metrics table, or Distributions accordion ------------------+
 | ...                                                                     |
 +-- footer: one line -----------------------------------------------------+
-| ? for help | v: Metrics | Deltas: ... | interval 5s | url    scroll: ^v |
+| ? for help | Metrics (v) | Deltas (d): ... | ⟳ 5s (+/-) | url scroll:^v |
 +-------------------------------------------------------------------------+
 ```
 
@@ -59,8 +59,9 @@ changes height.
 
 ## The header boxes
 
-Three boxes, always in this order: **Metric**, **Label**, **Aggregation**.
-Each shows the filter/aggregation currently *applied* — not necessarily
+Three boxes, always in this order: **Metric filter**, **Label filter**,
+**Aggregation**. Each caption ends with the key that opens the box in
+parentheses (`m`, `f`, `a`). Each shows the filter/aggregation currently *applied* — not necessarily
 what's mid-edit, since only one box is ever focused at a time and unfocused
 boxes always reflect the live config.
 
@@ -70,8 +71,8 @@ boxes always reflect the live config.
   blue border, or a red border plus an error message in the footer's left
   segment if the typed value doesn't parse yet — in which case the *applied*
   filter is still the last valid one, not what's shown in the box.
-- On a narrow terminal the caption itself may shrink (`Aggregation` →
-  `Agg`) or disappear, and the value may be truncated with `…`. A truncated
+- On a narrow terminal the caption itself may shrink (`Aggregation (a)` →
+  `Agg (a)`, `Metric filter (m)` → `Metric (m)`) or disappear, and the value may be truncated with `…`. A truncated
   value in a box is not the full filter that's actually in effect.
 - Syntax for each box's contents is in the README's "Filtering and
   aggregation" section. Briefly: **Metric** is a regex against the metric
@@ -147,10 +148,10 @@ values" below.
 The delta mode governs what the numbers *mean*, and it's stated once in the
 footer, not per-column — read it before interpreting any cell:
 
-- **`Deltas: Off`** — every column is the raw value at that scrape.
-- **`Deltas: Δ Next`** — every column except `Curr` is the delta to the next
+- **`Deltas (d): Off`** — every column is the raw value at that scrape.
+- **`Deltas (d): Δ Next`** — every column except `Curr` is the delta to the next
   column in time; `Curr` alone is raw. This is the mode in `docs/screen1.png`.
-- **`Deltas: Δ View`** — every column, including `Curr`, is a delta: the
+- **`Deltas (d): Δ View`** — every column, including `Curr`, is a delta: the
   value at that scrape minus the value in the oldest column on screen. The
   columns still sum left-to-right to that total.
 
@@ -191,7 +192,7 @@ If a metric you expected isn't in the table at all, it can be because:
 1. It doesn't match the **Metric** or **Label** filter box (check both).
 2. It was aggregated into a different, differently-named row (check the
    **Aggregation** box).
-3. `Static: Hidden` is active in the footer (see below) and every one of its
+3. `Static: Hidden (s)` is active in the footer (see below) and every one of its
    series has held a constant value for as long as history has been
    retained (fewer than 2 retained samples never counts as static, so a
    metric that just appeared is never hidden by this).
@@ -217,7 +218,7 @@ window, just a narrower terminal (or a smaller window at the time).
 
 ## The Distributions view (histograms and summaries)
 
-Switched to with `v` (footer reads `v: Distributions`); histograms and
+Switched to with `v` (footer reads `Distributions (v)`); histograms and
 summaries never appear in the Metrics view. Each family is one line:
 
 ```
@@ -260,11 +261,11 @@ reported quantile ranks (labeled `quantile`) for a summary. Columns are the
 same time columns as the Metrics view, governed by the same footer-level
 **Deltas** setting.
 
-- **`Buckets: Cumulative`** (footer, distributions view only) — each row is
+- **`Buckets (b): Cumulative`** (footer, distributions view only) — each row is
   exactly what the exporter published: bucket `le=1` includes everything
   `le=0.5` already counted, so values *increase* reading down the column
   towards `+Inf`.
-- **`Buckets: Per bucket`** — each row has had the bucket below it
+- **`Buckets (b): Per bucket`** — each row has had the bucket below it
   subtracted off, showing only the observations that landed in that band.
   This is the tool's own transform, not what's on the wire.
 - These are lifetime totals either way; pairing Bucket mode with a Delta
@@ -298,12 +299,12 @@ Left to right, some segments only appear conditionally:
 | Segment | Meaning | When it appears |
 |---|---|---|
 | `? for help` | static hint | always, unless a header box is being edited (then this space shows the edit hint / validation error instead) |
-| `v: Metrics` / `v: Distributions` | which top-level view is on screen | always |
-| `Deltas: Off` / `Δ Next` / `Δ View` | the delta mode explained above | always — applies to *both* views |
-| `Buckets: Cumulative` / `Per bucket` | the bucket mode explained above | only in the Distributions view, and only if terminal width allows (dropped first on a narrow terminal) |
-| `⏸ PAUSED` | scraping is paused (`p`); the store stops accepting new samples but nothing on screen goes stale-colored for it | only while paused |
-| `Static: Hidden` | `hide-static` is on (`s`): metrics/distributions whose retained values never changed are hidden entirely | only while active — its *absence* means hide-static is off, not "nothing is static" |
-| `⟳ 5s` | the current scrape interval (`+`/`-` to change) | always, unless dropped for width on a very narrow terminal |
+| `Metrics (v)` / `Distributions (v)` | which top-level view is on screen | always |
+| `Deltas (d): Off` / `Δ Next` / `Δ View` | the delta mode explained above | always — applies to *both* views |
+| `Buckets (b): Cumulative` / `Per bucket` | the bucket mode explained above | only in the Distributions view, and only if terminal width allows (dropped first on a narrow terminal) |
+| `⏸ PAUSED (p)` | scraping is paused (`p`); the store stops accepting new samples but nothing on screen goes stale-colored for it | only while paused |
+| `Static: Hidden (s)` | `hide-static` is on (`s`): metrics/distributions whose retained values never changed are hidden entirely | only while active — its *absence* means hide-static is off, not "nothing is static" |
+| `⟳ 5s (+/-)` | the current scrape interval (`+`/`-` to change) | always, unless dropped for width on a very narrow terminal |
 | `●` green + URL | connected; last scrape succeeded | while connected |
 | `⚠` red + error text | not connected; shows the fetch error | while disconnected — the table still shows the last good data, now frozen, plus a new epoch will start on reconnect |
 | `▲` / `▼` | there's more content above/below the current scroll position | only when the viewport isn't already at that edge, and never in a saved snapshot, which always contains every row |
@@ -323,11 +324,11 @@ screenshot:
 1. Read the three header boxes first — they change what every row name and
    grouping means, and a screenshot rarely calls this out on the rows
    themselves.
-2. Read `Deltas:` before reading any number in the table or grid — the same
+2. Read `Deltas (d):` before reading any number in the table or grid — the same
    digit means a totally different thing raw versus as a delta.
-3. If in the Distributions view, also read `Buckets:` — it and `Deltas:` are
+3. If in the Distributions view, also read `Buckets (b):` — it and `Deltas (d):` are
    independent axes and a cell only makes sense read against both.
-4. Check for `Static: Hidden` and treat any specific metric's absence as
+4. Check for `Static: Hidden (s)` and treat any specific metric's absence as
    possibly explained by it, alongside the two filter boxes.
 5. Never conclude "this metric is zero" or "this metric doesn't exist" from
    it being absent from a screenshot — walk the reasons in "A metric absent

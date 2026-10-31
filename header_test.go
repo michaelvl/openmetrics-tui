@@ -387,7 +387,7 @@ func TestHeaderShowsTheFiltersInForce(t *testing.T) {
 	m.cfg.FilterLabel = "env=prod"
 
 	got := plain(m.renderHeader())
-	for _, want := range []string{"┤ Metric ├", "queue_.*", "┤ Label ├", "env=prod", "┤ Aggregation ├"} {
+	for _, want := range []string{"┤ Metric filter (m) ├", "queue_.*", "┤ Label filter (f) ├", "env=prod", "┤ Aggregation (a) ├"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("header is missing %q:\n%s", want, got)
 		}
@@ -475,7 +475,7 @@ func TestFooterFitsTheTerminalWhileEditing(t *testing.T) {
 
 // The distribution view's footer carries one segment more than the metrics
 // view's, and a wrapped footer costs a row of the grid. Its own floor is higher
-// than the metrics view's because "v: Distributions" is the longer label, so the
+// than the metrics view's because "Distributions (v)" is the longer label, so the
 // widths here start where that label already fits; what this pins is that the
 // bucket indicator gives way rather than pushing the line over the edge.
 func TestDistributionFooterFitsTheTerminal(t *testing.T) {
@@ -496,7 +496,7 @@ func TestDistributionFooterFitsTheTerminal(t *testing.T) {
 		}
 		// Where there is room, the two axes have to be readable together - that is
 		// the whole point of moving the bucket mode down beside the delta mode.
-		if width >= 100 && !strings.Contains(plain(out), "Buckets: Per bucket") {
+		if width >= 120 && !strings.Contains(plain(out), "Buckets (b): Per bucket") {
 			t.Errorf("width %d: the footer lost the bucket mode:\n%s", width, plain(out))
 		}
 	}

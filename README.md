@@ -132,11 +132,11 @@ screen.
 
 Toggled with `d`, or set with `-delta-mode`.
 
-- `Deltas: Off` - metrics show raw.
-- `Deltas: Δ Next` - metrics columns show the delta to the next in the time
+- `Deltas (d): Off` - metrics show raw.
+- `Deltas (d): Δ Next` - metrics columns show the delta to the next in the time
   series, except for the current column, which show the raw metric value. _This
   makes changes over time easier to observe_.
-- `Deltas: Δ View` - the current column shows the delta within the current view,
+- `Deltas (d): Δ View` - the current column shows the delta within the current view,
   i.e. the newest value less the oldest one still on screen, which is the sum of
   the deltas in the columns beside it.
 
@@ -150,9 +150,9 @@ Toggled with `b`, in the distributions view. A histogram's buckets are
 cumulative as exported Prometheus/OpenMetric data, i.e. `le=0.5` counts
 everything `le=0.1` already counted.
 
-- `Buckets: Cumulative` - counts exactly as the exporter published them, rising
+- `Buckets (b): Cumulative` - counts exactly as the exporter published them, rising
   as you read down towards `+Inf`.
-- `Buckets: Per bucket` - each bucket less the one below it, so a row counts
+- `Buckets (b): Per bucket` - each bucket less the one below it, so a row counts
   only the observations that fell in that band. _This makes 'peaks' in the data
   easier to observe_.
 

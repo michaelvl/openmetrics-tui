@@ -1286,7 +1286,7 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.LabelMode, "label-mode", LabelModeHideFiltered, "Label display mode: all, hide-filtered (the default: drop labels the filter pins down), hide-all")
 	flag.StringVar(&cfg.FilterMetric, "filter-metric", "", "Regex to filter metrics by name")
 	flag.StringVar(&cfg.FilterLabel, "filter-label", "", "Label filter: comma-separated clauses that must all match, each key=value, key!=value, key=~regex, key!~regex, or a bare regex tried against every label value (e.g. 'env=prod,region!=eu')")
-	flag.StringVar(&cfg.DeltaMode, "delta-mode", DeltaModeOff, "Delta mode: off, next, view")
+	flag.StringVar(&cfg.DeltaMode, "delta-mode", DeltaModeNext, "Delta mode: off, next, view")
 	flag.BoolVar(&cfg.HideStatic, "hide-static", false, "Hide metrics whose recent values never change")
 	flag.StringVar(&cfg.Aggregation, "aggregation", "", "Combine series that differ only in other labels: a comma-separated label list, optionally preceded by sum, avg, min, max or count (e.g. 'pod', 'avg pod,instance', 'count'). Histograms fold with sum only; summaries never fold")
 

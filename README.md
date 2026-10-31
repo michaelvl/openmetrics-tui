@@ -130,7 +130,7 @@ screen.
 
 ### Deltas across time
 
-Toggled with `d`, or set with `-delta-mode`.
+Toggled with `d`, or set with `-delta-mode` (default `next`).
 
 - `Deltas (d): Off` - metrics show raw.
 - `Deltas (d): Δ Next` - metrics columns show the delta to the next in the time

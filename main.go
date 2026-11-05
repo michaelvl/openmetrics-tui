@@ -120,6 +120,11 @@ type clearSnapshotMsg struct{ gen int }
 // footer.
 const snapshotMsgDuration = 3 * time.Second
 
+// reconnectInterval is how often a lost target is retried, whatever the scrape
+// interval - a long interval must not leave the tool waiting minutes to notice
+// the target is back.
+const reconnectInterval = 3 * time.Second
+
 // intervalSteps is the ladder + and - move the scrape interval along.
 var intervalSteps = []time.Duration{
 	250 * time.Millisecond, 500 * time.Millisecond,
@@ -407,10 +412,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.store.UpdateFromFamilies(msg.families, msg.at)
+		wasDown := m.connectionError != nil
 		m.isConnected = true
 		m.connectionError = nil
 		m.lastSuccessfulFetch = msg.at
 		m.refresh()
+		if wasDown {
+			// The pending tick runs on the reconnect interval; go back to the
+			// scrape interval from this scrape on.
+			m.tickGen++
+			return m, m.tickCmd()
+		}
 		return m, nil
 	case error:
 		// Store connection error but keep retrying
@@ -420,9 +432,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The target most likely restarted; values after the break are not a
 		// continuation of those before it.
 		m.store.MarkBreak()
-		// Don't set m.err - that's for fatal errors only
-		// The tick/fetch cycle continues automatically
-		return m, nil
+		// Don't set m.err - that's for fatal errors only.
+		// Retry on the reconnect interval, counted from this failure, rather than
+		// waiting out the tick already scheduled on the scrape interval.
+		m.tickGen++
+		return m, m.tickCmd()
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -902,9 +916,18 @@ var baseStyle = lipgloss.NewStyle().
 	BorderStyle(lipgloss.NormalBorder()).
 	BorderForeground(lipgloss.Color("240"))
 
+// tickDelay is the wait until the next tick: the scrape interval while the
+// target answers, reconnectInterval while it does not.
+func (m model) tickDelay() time.Duration {
+	if m.connectionError != nil {
+		return reconnectInterval
+	}
+	return m.cfg.Interval
+}
+
 func (m model) tickCmd() tea.Cmd {
 	gen := m.tickGen
-	return tea.Tick(m.cfg.Interval, func(time.Time) tea.Msg {
+	return tea.Tick(m.tickDelay(), func(time.Time) tea.Msg {
 		return tickMsg{gen: gen}
 	})
 }

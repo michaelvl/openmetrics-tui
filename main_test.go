@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -124,6 +125,46 @@ func TestIntervalChangeRetiresTheOldTickChain(t *testing.T) {
 	m, _ = press(m, "-")
 	if m.cfg.Interval != 5*time.Second {
 		t.Errorf("interval = %v after -, want back to 5s", m.cfg.Interval)
+	}
+}
+
+// A lost target is retried every reconnectInterval whatever the scrape
+// interval, and a successful scrape puts the chain back on the scrape interval.
+func TestReconnectRetriesOnItsOwnInterval(t *testing.T) {
+	m := headerModel(t, 80, twoGauges)
+	m.cfg.Interval = 5 * time.Minute
+
+	gen := m.tickGen
+	next, cmd := m.Update(errors.New("connection refused"))
+	m = next.(model)
+	if cmd == nil || m.tickGen == gen {
+		t.Fatalf("a failed fetch should start a new tick chain (gen %d -> %d, cmd %v)", gen, m.tickGen, cmd)
+	}
+	if got := m.tickDelay(); got != reconnectInterval {
+		t.Errorf("tick delay while disconnected = %v, want %v", got, reconnectInterval)
+	}
+
+	// Changing the interval while down keeps retrying on the reconnect interval.
+	m, _ = press(m, "-")
+	if got := m.tickDelay(); got != reconnectInterval {
+		t.Errorf("tick delay after - while disconnected = %v, want %v", got, reconnectInterval)
+	}
+
+	gen = m.tickGen
+	next, cmd = m.Update(scrapeResult{families: parseFamilies(t, twoGauges), at: time.Now()})
+	m = next.(model)
+	if cmd == nil || m.tickGen == gen {
+		t.Fatalf("reconnecting should start a new tick chain (gen %d -> %d, cmd %v)", gen, m.tickGen, cmd)
+	}
+	if got := m.tickDelay(); got != m.cfg.Interval {
+		t.Errorf("tick delay after reconnect = %v, want the scrape interval %v", got, m.cfg.Interval)
+	}
+
+	// A scrape while connected leaves the running chain alone.
+	gen = m.tickGen
+	next, _ = m.Update(scrapeResult{families: parseFamilies(t, twoGauges), at: time.Now()})
+	if next.(model).tickGen != gen {
+		t.Error("a scrape while connected restarted the tick chain")
 	}
 }
 

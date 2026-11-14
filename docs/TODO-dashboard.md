@@ -18,12 +18,12 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 
 ## Phase 1: Prometheus API client (`internal/promapi`)
 
-- [ ] `Querier` interface (`QueryRange`, `Instant`), `Series`, `Sample` types
-- [ ] HTTP client: POST form, timeout, context cancellation
-- [ ] Auth: `--prom-token-file`, `--prom-user` + `--prom-password-file`
-- [ ] Parse `status/errorType/error`; handle `NaN`/`+Inf`; `matrix`, `vector`, `scalar`
-- [ ] Step selection helper (`max(minStep, range/width)`, under 11k points)
-- [ ] `httptest` tests: success, error payload, non-2xx, malformed JSON, timeout, `NaN`
+- [x] `Querier` interface (`QueryRange`, `Instant`), `Series`, `Sample` types
+- [x] HTTP client: POST form, timeout, context cancellation
+- [x] Auth: bearer token file, basic auth user + password file (client only; flags wired in Phase 2)
+- [x] Parse `status/errorType/error`; handle `NaN`/`+Inf`; `matrix`, `vector`, `scalar`
+- [x] Step selection helper (`max(minStep, range/width)`, under 11k points)
+- [x] `httptest` tests: success, error payload, non-2xx, malformed JSON, timeout, `NaN`
 
 ## Phase 2: Dashboard definition (`internal/dashboard`, `cmd/omtui-dash`)
 

@@ -29,11 +29,19 @@ const (
 	noDataMsg = "no data (not scraped?)"
 )
 
+// Status colours, sampled from the Tokyo Night palette: softer than the
+// saturated ANSI 196/220 on a dark background.
+const (
+	colRed    = "#f7768e"
+	colYellow = "#e0af68"
+	colGreen  = "#9ece6a"
+)
+
 var (
 	faintStyle  = lipgloss.NewStyle().Faint(true)
-	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
-	okStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("71"))
+	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(colRed))
+	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colYellow))
+	okStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colGreen))
 	accentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
 	titleStyle  = lipgloss.NewStyle().Bold(true)
 	modeStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
@@ -43,7 +51,7 @@ var (
 // three are passed to lipgloss as they are, which accepts ANSI numbers and hex.
 func colorStyle(name string) lipgloss.Style {
 	c := map[string]string{
-		"red": "196", "yellow": "220", "green": "71", "orange": "208",
+		"red": colRed, "yellow": colYellow, "green": colGreen, "orange": "#ff9e64",
 		"blue": "33", "purple": "135", "cyan": "86", "grey": "244", "gray": "244",
 	}[name]
 	if c == "" {

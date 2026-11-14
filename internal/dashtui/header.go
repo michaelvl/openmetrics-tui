@@ -115,7 +115,7 @@ func (m *Model) renderBox(b boxPos) string {
 	border := lipgloss.Color("240")
 	switch {
 	case focused && m.edit.err != "":
-		border = lipgloss.Color("196")
+		border = lipgloss.Color(colRed)
 	case focused:
 		border = lipgloss.Color("63")
 	}

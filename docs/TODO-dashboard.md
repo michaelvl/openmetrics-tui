@@ -51,11 +51,11 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 ## Phase 4: Managed backend (`internal/managed`)
 
 - [x] Verify VictoriaMetrics assumptions: min `-retentionPeriod`, `-search.latencyOffset` effect (24h minimum, bare number = months; default offset hides fresh samples, `=0` passed; see [managed-verification.md](managed-verification.md))
-- [ ] Verify Appendix B scrape config items (duplicate targets, `api_server` over HTTP, `__tmp_path` rules, `labeldrop`, port fallback). Verified against real VictoriaMetrics + a fake API; still open: real `kubectl proxy` watches, TLS/non-HTTP pods
+- [x] Verify Appendix B scrape config items: duplicate targets, `api_server` over HTTP, `__tmp_path` rules, `labeldrop` and port fallback against real VictoriaMetrics and a fake API; then end to end on a kind cluster (`make kind-up kind-dash`, confirmed working 2026-11-14). Still untested: TLS and non-HTTP pods
 - [x] Mode selection (`--prom`, `--managed`, `datasource.url`, error listing options)
 - [x] Managed flags: `--kube-context`, `--namespace`, `--kubectl-bin`, `--vm-bin`, `--data-dir`, `--retention`, `--scrape-config`, `--log-file`
-- [ ] Preflight (`kubectl version --client`, `auth can-i` checks) (tested with fakes only; never run against a real kubectl)
-- [ ] Start `kubectl proxy --port=0`, parse port, `GET /livez`, stdin closed (implemented, tested with a fake proxy; not run against a real `kubectl proxy`)
+- [x] Preflight (`kubectl version --client`, `auth can-i` checks); confirmed with a real kubectl on kind
+- [x] Start `kubectl proxy --port=0`, parse port, `GET /livez`, stdin closed; confirmed with a real `kubectl proxy` on kind
 - [x] Scrape config generator (annotation and selector modes), 0700 temp dir
 - [x] Start VictoriaMetrics with port retry, `GET /health`
 - [x] Lifecycle: process groups, `Pdeathsig`, ordered shutdown (SIGTERM, 5s, SIGKILL, cleanup)
@@ -75,7 +75,7 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 - [x] Suggestion overlay (substring filter, 8 rows, "N more", "k of n values", cached lookups)
 - [x] Keys: tab, up/down, space/enter, `s`, `/`, `r`, `p`, `+`/`-`, `?`, `q`, `L`, `R`
 - [x] Footer in `Name (key)` style; per-panel threshold legend
-- [x] Status line (title, backend mode, child health); cold-start and "no data (not scraped?)" notes (child health, `L` and `R` tested with a fake `Backend` only; not run against a real managed backend)
+- [x] Status line (title, backend mode, child health); cold-start and "no data (not scraped?)" notes (child health, `L` and `R` tested with a fake `Backend`; managed mode itself confirmed on kind)
 - [x] Snapshot-to-file
 - [x] Tests: golden view strings at fixed widths, update loop with fake `Querier`
 

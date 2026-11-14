@@ -1,5 +1,6 @@
 // Package dashapp is the omtui-dash command: flag handling, backend
-// selection and the --check mode. The TUI arrives in Phase 5.
+// selection (external or managed) and the --check mode. The TUI arrives in
+// Phase 5.
 package dashapp
 
 import (
@@ -9,10 +10,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/michaelvl/openmetrics-tui/internal/dashboard"
+	"github.com/michaelvl/openmetrics-tui/internal/managed"
 	"github.com/michaelvl/openmetrics-tui/internal/promapi"
 )
 
@@ -30,10 +35,9 @@ func (v varFlags) Set(s string) error {
 	return nil
 }
 
-// managedFlags are accepted so scripts and help text are stable, but the
-// managed backend is not implemented until Phase 4.
-var managedFlags = []string{
-	"managed", "kube-context", "namespace", "kubectl-bin", "vm-bin",
+// managedOnlyFlags are meaningless without --managed.
+var managedOnlyFlags = []string{
+	"kube-context", "namespace", "kubectl-bin", "vm-bin",
 	"data-dir", "retention", "scrape-config", "log-file",
 }
 
@@ -42,6 +46,8 @@ type config struct {
 	vars    varFlags
 	promURL string
 	opts    promapi.Options
+	managed bool
+	mopts   managed.Options
 }
 
 // Main runs the command and exits the process.
@@ -60,15 +66,15 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&cfg.opts.TokenFile, "prom-token-file", "", "file holding a bearer token for --prom")
 	fs.StringVar(&cfg.opts.User, "prom-user", "", "basic auth user for --prom")
 	fs.StringVar(&cfg.opts.PasswordFile, "prom-password-file", "", "file holding the basic auth password")
-	fs.Bool("managed", false, "(not implemented yet) start kubectl proxy and a local VictoriaMetrics")
-	fs.String("kube-context", "", "(not implemented yet) kubectl context for --managed")
-	fs.String("namespace", "", "(not implemented yet) namespace for --managed")
-	fs.String("kubectl-bin", "", "(not implemented yet) kubectl binary for --managed")
-	fs.String("vm-bin", "", "(not implemented yet) victoria-metrics binary for --managed")
-	fs.String("data-dir", "", "(not implemented yet) data directory for --managed")
-	fs.String("retention", "", "(not implemented yet) retention for --managed")
-	fs.String("scrape-config", "", "(not implemented yet) scrape config override for --managed")
-	fs.String("log-file", "", "(not implemented yet) log file for --managed")
+	fs.BoolVar(&cfg.managed, "managed", false, "start kubectl proxy and a local VictoriaMetrics that scrapes pods (needs kubectl)")
+	fs.StringVar(&cfg.mopts.KubeContext, "kube-context", "", "kubectl context for --managed (default: current context)")
+	fs.StringVar(&cfg.mopts.Namespace, "namespace", "", "scrape only this namespace with --managed (overrides scrape.namespaces)")
+	fs.StringVar(&cfg.mopts.KubectlBin, "kubectl-bin", "", "kubectl binary for --managed (default: kubectl on PATH)")
+	fs.StringVar(&cfg.mopts.VMBin, "vm-bin", "", "victoria-metrics binary for --managed (default: victoria-metrics on PATH)")
+	fs.StringVar(&cfg.mopts.DataDir, "data-dir", "", "keep --managed data in this `dir` so history survives restarts (default: temp dir removed on exit)")
+	fs.StringVar(&cfg.mopts.Retention, "retention", managed.DefaultRetention, "data retention for --managed, with a unit suffix (minimum 24h)")
+	fs.StringVar(&cfg.mopts.ScrapeConfig, "scrape-config", "", "use this scrape config instead of generating one; ${KUBE_PROXY} is replaced by the proxy address")
+	fs.StringVar(&cfg.mopts.LogFile, "log-file", "", "append kubectl and victoria-metrics output to this `file` (--managed)")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "Usage: omtui-dash [flags] dashboard.yaml\n\nFlags:\n")
 		fs.PrintDefaults()
@@ -80,17 +86,21 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	var unimplemented []string
-	fs.Visit(func(f *flag.Flag) {
-		for _, m := range managedFlags {
-			if f.Name == m {
-				unimplemented = append(unimplemented, "--"+m)
-			}
-		}
-	})
-	if len(unimplemented) > 0 {
-		_, _ = fmt.Fprintf(stderr, "omtui-dash: managed mode is not implemented yet (Phase 4); cannot use %s\n", strings.Join(unimplemented, ", "))
+	if cfg.promURL != "" && cfg.managed {
+		_, _ = fmt.Fprintln(stderr, "omtui-dash: --prom and --managed are mutually exclusive")
 		return 2
+	}
+	if !cfg.managed {
+		var stray []string
+		fs.Visit(func(f *flag.Flag) {
+			if slices.Contains(managedOnlyFlags, f.Name) {
+				stray = append(stray, "--"+f.Name)
+			}
+		})
+		if len(stray) > 0 {
+			_, _ = fmt.Fprintf(stderr, "omtui-dash: %s only apply with --managed\n", strings.Join(stray, ", "))
+			return 2
+		}
 	}
 	if fs.NArg() != 1 {
 		fs.Usage()
@@ -117,28 +127,49 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	q, err := newQuerier(&cfg, d)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	q, closeBackend, err := newBackend(ctx, &cfg, d, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "omtui-dash: %v\n", err)
+		var se *managed.StartError
+		if errors.As(err, &se) {
+			return 1 // the backend failed to start, as opposed to bad usage
+		}
 		return 2
 	}
-	if Check(context.Background(), d, vals, q, time.Now(), stdout) > 0 {
+	defer closeBackend()
+	if Check(ctx, d, vals, q, time.Now(), stdout) > 0 {
 		return 1
 	}
 	return 0
 }
 
-// newQuerier picks the backend: --prom, else datasource.url.
-func newQuerier(cfg *config, d *dashboard.Dashboard) (promapi.Querier, error) {
-	opts := cfg.opts
-	opts.URL = cfg.promURL
-	if opts.URL == "" {
-		opts.URL = d.Datasource.URL
+// newBackend picks the backend (see managed.SelectMode) and returns its
+// Querier and a function that releases it. Startup failures of the managed
+// backend are reported before anything else happens.
+func newBackend(ctx context.Context, cfg *config, d *dashboard.Dashboard, stderr io.Writer) (promapi.Querier, func(), error) {
+	mode, url, err := managed.SelectMode(cfg.promURL, cfg.managed, d.Datasource.URL)
+	if err != nil {
+		return nil, nil, err
 	}
-	if opts.URL == "" {
-		return nil, errors.New("no backend: pass --prom URL or set datasource.url in the dashboard")
+	if mode == managed.ModeExternal {
+		opts := cfg.opts
+		opts.URL = url
+		q, err := promapi.New(opts)
+		return q, func() {}, err
 	}
-	return promapi.New(opts)
+	mopts := cfg.mopts
+	mopts.Scrape = d.Scrape
+	mopts.Interactive = stderr
+	b, err := managed.Start(ctx, mopts)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, w := range b.Warnings() {
+		_, _ = fmt.Fprintf(stderr, "omtui-dash: warning: %s\n", w)
+	}
+	return b.Querier(), func() { _ = b.Close() }, nil
 }
 
 const (

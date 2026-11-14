@@ -50,20 +50,20 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 
 ## Phase 4: Managed backend (`internal/managed`)
 
-- [ ] Verify VictoriaMetrics assumptions: min `-retentionPeriod`, `-search.latencyOffset` effect
-- [ ] Verify Appendix B scrape config items (duplicate targets, `api_server` over HTTP, `__tmp_path` rules, `labeldrop`, port fallback)
-- [ ] Mode selection (`--prom`, `--managed`, `datasource.url`, error listing options)
-- [ ] Managed flags: `--kube-context`, `--namespace`, `--kubectl-bin`, `--vm-bin`, `--data-dir`, `--retention`, `--scrape-config`, `--log-file`
-- [ ] Preflight (`kubectl version --client`, `auth can-i` checks)
-- [ ] Start `kubectl proxy --port=0`, parse port, `GET /livez`, stdin closed
-- [ ] Scrape config generator (annotation and selector modes), 0700 temp dir
-- [ ] Start VictoriaMetrics with port retry, `GET /health`
-- [ ] Lifecycle: process groups, `Pdeathsig`, ordered shutdown (SIGTERM, 5s, SIGKILL, cleanup)
-- [ ] Bounded log ring buffer, child watch, restart support
-- [ ] `victoria-metrics -version` minimum check (accept devbox 1.156.0 and Nix)
-- [ ] Startup failures exit before TUI with failing step and output tail
-- [ ] Tests: `TestHelperProcess` supervisor tests, golden scrape config, optional VM + mock-server integration test
-- [ ] Packaging: `flake.nix` `makeWrapper`, `--suffix PATH`, `packages/apps.omtui-dash`, dev shell `victoriametrics`, `vendorHash`
+- [x] Verify VictoriaMetrics assumptions: min `-retentionPeriod`, `-search.latencyOffset` effect (24h minimum, bare number = months; default offset hides fresh samples, `=0` passed; see [managed-verification.md](managed-verification.md))
+- [ ] Verify Appendix B scrape config items (duplicate targets, `api_server` over HTTP, `__tmp_path` rules, `labeldrop`, port fallback). Verified against real VictoriaMetrics + a fake API; still open: real `kubectl proxy` watches, TLS/non-HTTP pods
+- [x] Mode selection (`--prom`, `--managed`, `datasource.url`, error listing options)
+- [x] Managed flags: `--kube-context`, `--namespace`, `--kubectl-bin`, `--vm-bin`, `--data-dir`, `--retention`, `--scrape-config`, `--log-file`
+- [ ] Preflight (`kubectl version --client`, `auth can-i` checks) (tested with fakes only; never run against a real kubectl)
+- [ ] Start `kubectl proxy --port=0`, parse port, `GET /livez`, stdin closed (implemented, tested with a fake proxy; not run against a real `kubectl proxy`)
+- [x] Scrape config generator (annotation and selector modes), 0700 temp dir
+- [x] Start VictoriaMetrics with port retry, `GET /health`
+- [x] Lifecycle: process groups, `Pdeathsig`, ordered shutdown (SIGTERM, 5s, SIGKILL, cleanup)
+- [x] Bounded log ring buffer, child watch, restart support
+- [x] `victoria-metrics -version` minimum check (accept devbox 1.156.0 and Nix)
+- [x] Startup failures exit before TUI with failing step and output tail
+- [x] Tests: `TestHelperProcess` supervisor tests, golden scrape config, optional VM + mock-server integration test
+- [x] Packaging: `flake.nix` `makeWrapper`, `--suffix PATH`, `packages/apps.omtui-dash`, dev shell `victoriametrics`, `vendorHash`
 
 ## Phase 5: TUI (`cmd/omtui-dash`)
 
@@ -83,7 +83,7 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 
 - [ ] `cmd/mock-server`: `/api/v1/query_range` and `/api/v1/query` with synthetic matrices
 - [ ] `examples/controllers.yaml` working against the mock
-- [ ] `vhs` tape and screenshots in `docs/`
+- [ ] screenshots in `docs/`
 
 ## Phase 7: Documentation
 

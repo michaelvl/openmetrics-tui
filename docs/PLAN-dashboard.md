@@ -234,7 +234,7 @@ Selecting the mode:
 - Managed-only flags: `--kube-context`, `--namespace` (overrides
   `scrape.namespaces`), `--kubectl-bin`, `--vm-bin`, `--data-dir` (default: a
   temp dir removed on exit; if given, kept so history survives restarts),
-  `--retention` (default 24h; VictoriaMetrics rejects less, to be verified), `--scrape-config FILE` (escape hatch, see below).
+  `--retention` (default 24h, unit suffix required; VictoriaMetrics rejects less than 24h, verified), `--scrape-config FILE` (escape hatch, see below).
 
 What gets started, in order:
 
@@ -251,7 +251,7 @@ What gets started, in order:
    `kubernetes_sd_configs.api_server` at the proxy, and rewrites each target to
    `/api/v1/namespaces/$ns/pods/$pod:$port/proxy$path` with `__address__` set to
    the proxy (the recipe from the earlier design discussion), and sets
-   `namespace`, `pod` and `container` labels. It is generated from the `scrape:`
+   `namespace` and `pod` labels (no `container`: see docs/managed-verification.md). It is generated from the `scrape:`
    section of the dashboard YAML. `--scrape-config` supplies a user-written
    file instead; `${KUBE_PROXY}` in it is replaced with `127.0.0.1:PORT`.
 3. `victoria-metrics -promscrape.config=... -storageDataPath=...
@@ -578,14 +578,14 @@ Decisions taken (also in Phase 2) and what remains:
   to confirm in Phase 2 when writing the golden fixtures: that the example
   validates and renders against the mock.
 
-## Appendix B: Example generated scrape config (design sketch, untested)
+## Appendix B: Example generated scrape config (design sketch, partly verified)
 
 What `internal/managed` should generate from the `scrape:` section of
-Appendix A in annotation mode, with the `kubectl proxy` port filled in (shown as `127.0.0.1:8001`). Selector mode replaces the two annotation `keep`/port rules with a `__meta_kubernetes_pod_label_*` keep rule and the first container port (or the configured one), see Phase 2.
-It is the golden file for the Phase 4 generator tests. It was written from
-documentation and memory and has not been run against VictoriaMetrics or a
-cluster; verifying it is the first task of Phase 4, especially the items under
-"To verify" below.
+Appendix A in annotation mode, with the `kubectl proxy` port filled in (shown as `127.0.0.1:8001`). Selector mode replaces the two annotation `keep`/port rules with a `__meta_kubernetes_pod_label_*` keep rule and every declared container port (or the configured one; VictoriaMetrics makes no target for a pod without declared ports), see Phase 2.
+It is the golden file for the Phase 4 generator tests. It was run against a real
+VictoriaMetrics and a fake Kubernetes API, not a cluster; see
+[managed-verification.md](managed-verification.md) for what was and was not
+verified (the items under "To verify" below that need a cluster remain open).
 
 ```yaml
 scrape_configs:
@@ -605,6 +605,11 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
         action: keep
         regex: "true"
+      # pods without the port annotation are skipped (otherwise they would
+      # scrape the API server itself at the default path)
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: keep
+        regex: .+
       # path: annotation or /metrics
       - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
         regex: (.+)
@@ -630,8 +635,8 @@ scrape_configs:
         target_label: namespace
       - source_labels: [__meta_kubernetes_pod_name]
         target_label: pod
-      - source_labels: [__meta_kubernetes_pod_container_name]
-        target_label: container
+      # no container label: a two-container pod would give two differing targets
+      # for the same URL and be scraped twice (verified)
       - source_labels: [__meta_kubernetes_pod_name]
         target_label: instance # otherwise every target shares instance=127.0.0.1:8001
       - regex: __tmp_path

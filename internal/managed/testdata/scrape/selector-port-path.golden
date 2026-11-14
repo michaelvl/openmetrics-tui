@@ -1,0 +1,28 @@
+scrape_configs:
+    - job_name: pods-via-proxy
+      scrape_interval: 15s
+      scheme: http
+      kubernetes_sd_configs:
+        - role: pod
+          api_server: http://127.0.0.1:8001
+          namespaces:
+            names: [prod]
+          selectors:
+            - role: pod
+              label: app=foo
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_phase]
+          action: keep
+          regex: Running
+        - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_pod_name]
+          regex: (.+);(.+)
+          replacement: /api/v1/namespaces/$1/pods/$2:8080/proxy/stats/prom
+          target_label: __metrics_path__
+        - replacement: 127.0.0.1:8001
+          target_label: __address__
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: instance

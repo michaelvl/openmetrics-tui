@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/michaelvl/openmetrics-tui/internal/managed/fakebin"
 )
 
 const dash = `title: T
@@ -109,17 +111,84 @@ func TestNoBackend(t *testing.T) {
 	}
 }
 
-func TestManagedFlagsAreStubs(t *testing.T) {
+func TestBackendSelectionErrors(t *testing.T) {
 	path := writeDash(t, dash)
+	code, _, errOut := run("--prom", "http://x", "--managed", "--check", path)
+	if code != 2 || !strings.Contains(errOut, "mutually exclusive") {
+		t.Errorf("code %d, stderr %q", code, errOut)
+	}
 	for _, args := range [][]string{
-		{"--managed"}, {"--kube-context", "x"}, {"--namespace", "x"}, {"--kubectl-bin", "x"},
-		{"--vm-bin", "x"}, {"--data-dir", "x"}, {"--retention", "1d"},
+		{"--kube-context", "x"}, {"--namespace", "x"}, {"--kubectl-bin", "x"},
+		{"--vm-bin", "x"}, {"--data-dir", "x"}, {"--retention", "2d"},
 		{"--scrape-config", "x"}, {"--log-file", "x"},
 	} {
 		code, _, errOut := run(append(args, "--check", path)...)
-		if code != 2 || !strings.Contains(errOut, "not implemented yet") || !strings.Contains(errOut, args[0]) {
+		if code != 2 || !strings.Contains(errOut, "only apply with --managed") || !strings.Contains(errOut, args[0]) {
 			t.Errorf("%v: code %d, stderr %q", args, code, errOut)
 		}
+	}
+	code, _, errOut = run("--check", writeDash(t, "title: T\npanels:\n  - {title: A, query: up}\n"))
+	if code != 2 || !strings.Contains(errOut, "--prom") || !strings.Contains(errOut, "--managed") || !strings.Contains(errOut, "datasource.url") {
+		t.Errorf("no-backend message should list all options: %q", errOut)
+	}
+}
+
+// TestHelperProcess is not a test: the test binary re-executes itself as a
+// fake kubectl or victoria-metrics (see fakebin).
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	args := os.Args
+	for i, a := range args {
+		if a == "--" {
+			args = args[i+1:]
+			break
+		}
+	}
+	os.Exit(fakebin.Run(args[0], args[1:]))
+}
+
+func fakeTool(t *testing.T, name string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	script := "#!/bin/sh\nexec '" + os.Args[0] + "' -test.run='^TestHelperProcess$' -- " + name + " \"$@\"\n"
+	if err := os.WriteFile(p, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestManagedCheckEndToEnd(t *testing.T) {
+	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	kubectl, vm := fakeTool(t, "kubectl"), fakeTool(t, "victoria-metrics")
+	path := writeDash(t, "title: T\npanels:\n  - {title: Good, query: up}\n")
+	logFile := filepath.Join(t.TempDir(), "log")
+
+	code, out, errOut := run("--managed", "--check", "--kubectl-bin", kubectl, "--vm-bin", vm, "--log-file", logFile, path)
+	if code != 0 || !strings.Contains(out, "ok    Good: 1 rows") {
+		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out, errOut)
+	}
+	if left, _ := filepath.Glob(filepath.Join(tmp, "omtui-dash-*")); len(left) != 0 {
+		t.Errorf("temp dir left behind: %v", left)
+	}
+	if raw, _ := os.ReadFile(logFile); !strings.Contains(string(raw), "Starting to serve on 127.0.0.1:") {
+		t.Errorf("log file: %q", raw)
+	}
+}
+
+func TestManagedStartupFailureExitsWithStep(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	path := writeDash(t, "title: T\npanels:\n  - {title: Good, query: up}\n")
+	code, out, errOut := run("--managed", "--check", "--kubectl-bin", "/nonexistent/kubectl", path)
+	if code != 1 || out != "" || !strings.Contains(errOut, "kubectl version --client") || !strings.Contains(errOut, "install kubectl") {
+		t.Errorf("code %d\nstdout %s\nstderr %s", code, out, errOut)
+	}
+	code, _, errOut = run("--managed", "--check", "--retention", "1h", "--kubectl-bin", "/nonexistent/kubectl", path)
+	if code != 2 || !strings.Contains(errOut, "24h") {
+		t.Errorf("retention: code %d stderr %s", code, errOut)
 	}
 }
 

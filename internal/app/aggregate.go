@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"errors"
@@ -8,6 +8,11 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/michaelvl/openmetrics-tui/internal/store"
+
+	"github.com/michaelvl/openmetrics-tui/internal/histogram"
+	"github.com/michaelvl/openmetrics-tui/internal/textutil"
 )
 
 // The aggregation field combines series that differ only in labels nobody asked
@@ -191,7 +196,7 @@ func validateAggregation(value string) error {
 			return errors.New("empty label name")
 		}
 		if !labelNamePattern.MatchString(name) {
-			return fmt.Errorf("%s: not a label name", truncateToWidth(name, 12))
+			return fmt.Errorf("%s: not a label name", textutil.TruncateToWidth(name, 12))
 		}
 	}
 	return nil
@@ -199,27 +204,27 @@ func validateAggregation(value string) error {
 
 // aggregateSeries folds the filtered series according to the aggregation field,
 // or returns them untouched when it is empty.
-func (m model) aggregateSeries(series []*MetricSeries) []*MetricSeries {
+func (m model) aggregateSeries(series []*store.MetricSeries) []*store.MetricSeries {
 	return parseAggregation(m.cfg.Aggregation).aggregate(series)
 }
 
 // aggregate groups the input and folds each group into one synthetic series.
 //
-// The result is an ordinary *MetricSeries and not a type of its own, which is
+// The result is an ordinary *store.MetricSeries and not a type of its own, which is
 // what keeps this change small: ValuesWithDeltas, IsStatic and the whole table
 // renderer go on working on an aggregated row exactly as they do on a scraped one.
-func (spec aggSpec) aggregate(series []*MetricSeries) []*MetricSeries {
+func (spec aggSpec) aggregate(series []*store.MetricSeries) []*store.MetricSeries {
 	if !spec.active {
 		return series
 	}
 
-	groups := make(map[string][]*MetricSeries)
+	groups := make(map[string][]*store.MetricSeries)
 	keys := make([]string, 0, len(series))
 	for _, s := range series {
 		// The group key reuses the store's own signature function, so it is stable
 		// from one scrape to the next and sorts the same way the unaggregated list
 		// does - name first, then labels.
-		key := GenerateSignature(s.Name, spec.retainLabels(s.Labels))
+		key := store.GenerateSignature(s.Name, spec.retainLabels(s.Labels))
 		if _, seen := groups[key]; !seen {
 			keys = append(keys, key)
 		}
@@ -227,7 +232,7 @@ func (spec aggSpec) aggregate(series []*MetricSeries) []*MetricSeries {
 	}
 	sort.Strings(keys)
 
-	out := make([]*MetricSeries, 0, len(keys))
+	out := make([]*store.MetricSeries, 0, len(keys))
 	for _, key := range keys {
 		out = append(out, spec.fold(groups[key]))
 	}
@@ -252,7 +257,7 @@ func (spec aggSpec) retainLabels(labels map[string]string) map[string]string {
 }
 
 // fold reduces one group to a single series.
-func (spec aggSpec) fold(group []*MetricSeries) *MetricSeries {
+func (spec aggSpec) fold(group []*store.MetricSeries) *store.MetricSeries {
 	first := group[0]
 
 	length := 0
@@ -262,7 +267,7 @@ func (spec aggSpec) fold(group []*MetricSeries) *MetricSeries {
 		}
 	}
 
-	return &MetricSeries{
+	return &store.MetricSeries{
 		// Decorating the name is what tells the user a row is derived. Doing it
 		// here rather than in the renderer means column widths and styling need no
 		// changes, and it is safe because the metric-name filter has already run
@@ -278,7 +283,7 @@ func (spec aggSpec) fold(group []*MetricSeries) *MetricSeries {
 // last one is this scrape. The length is a parameter rather than the longest
 // member, because a distribution folds several groups - one per bucket - that all
 // have to land on the same time axis.
-func (spec aggSpec) foldValues(group []*MetricSeries, length int) []float64 {
+func (spec aggSpec) foldValues(group []*store.MetricSeries, length int) []float64 {
 	values := make([]float64, length)
 	for i := range values {
 		values[i] = spec.foldAt(group, length-1-i)
@@ -295,7 +300,7 @@ func (spec aggSpec) foldValues(group []*MetricSeries, length int) []float64 {
 // of its targets is down. When nobody reported the result is NaN, which the table
 // already draws as ".": for count that is "nothing to count here", which is worth
 // telling apart from a genuine count of zero.
-func (spec aggSpec) foldAt(group []*MetricSeries, offset int) float64 {
+func (spec aggSpec) foldAt(group []*store.MetricSeries, offset int) float64 {
 	acc := 0.0
 	count := 0
 	for _, s := range group {
@@ -361,15 +366,15 @@ func (spec aggSpec) aggregateDistributions(entries []distEntry) []distEntry {
 		return entries
 	}
 
-	groups := make(map[string][]*DistributionSeries)
+	groups := make(map[string][]*store.DistributionSeries)
 	keys := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		// A summary keys on its own store signature, so it lands in a group of one
 		// and comes back out as itself. A histogram keys the way the scalar fold
 		// does: by name and the grouping labels, never across names.
 		key := entry.sig
-		if entry.dist.Kind == KindHistogram {
-			key = GenerateSignature(entry.dist.Name, spec.retainLabels(entry.dist.Labels))
+		if entry.dist.Kind == store.KindHistogram {
+			key = store.GenerateSignature(entry.dist.Name, spec.retainLabels(entry.dist.Labels))
 		}
 		if _, seen := groups[key]; !seen {
 			keys = append(keys, key)
@@ -386,7 +391,7 @@ func (spec aggSpec) aggregateDistributions(entries []distEntry) []distEntry {
 		// signature: two members must not each claim their own expanded state for
 		// the one row they now share.
 		entry := distEntry{sig: key, dist: group[0]}
-		if group[0].Kind == KindHistogram {
+		if group[0].Kind == store.KindHistogram {
 			entry.dist = spec.foldDistributions(group)
 		}
 		out = append(out, entry)
@@ -395,12 +400,12 @@ func (spec aggSpec) aggregateDistributions(entries []distEntry) []distEntry {
 }
 
 // foldDistributions sums a group of histogram families into one synthetic family.
-// The result is an ordinary *DistributionSeries, so the grid, the shading, the
+// The result is an ordinary *store.DistributionSeries, so the grid, the shading, the
 // quantile estimator and hide-static all go on working on it unchanged.
-func (spec aggSpec) foldDistributions(group []*DistributionSeries) *DistributionSeries {
+func (spec aggSpec) foldDistributions(group []*store.DistributionSeries) *store.DistributionSeries {
 	first := group[0]
 	labels := spec.retainLabels(first.Labels)
-	out := &DistributionSeries{
+	out := &store.DistributionSeries{
 		// Decorated for the same reason an aggregated table row is: it is the only
 		// thing on the line that says these numbers are derived. The metric-name
 		// filter has already run and never sees the decorated name.
@@ -411,33 +416,33 @@ func (spec aggSpec) foldDistributions(group []*DistributionSeries) *Distribution
 
 	// One length for the whole folded family, so a grid column means the same
 	// scrape in every bucket row even when members have retained different
-	// histories - the same alignment valueAt gives a scraped family.
+	// histories - the same alignment histogram.ValueAt gives a scraped family.
 	length := 0
 	for _, dist := range group {
-		if n := distScrapeCount(dist); n > length {
+		if n := histogram.DistScrapeCount(dist); n > length {
 			length = n
 		}
 	}
 
 	for _, bound := range unionBounds(group) {
-		members := make([]*MetricSeries, 0, len(group))
+		members := make([]*store.MetricSeries, 0, len(group))
 		for _, dist := range group {
-			if series := dist.findPoint(bound); series != nil {
+			if series := dist.FindPoint(bound); series != nil {
 				members = append(members, series)
 			}
 		}
-		out.insertPoint(bound, &MetricSeries{
+		out.InsertPoint(bound, &store.MetricSeries{
 			Name:   out.Name + "_bucket",
-			Kind:   KindCounter,
-			Labels: withLabel(labels, "le", formatBound(bound)),
+			Kind:   store.KindCounter,
+			Labels: store.WithLabel(labels, "le", store.FormatBound(bound)),
 			Values: spec.foldValues(members, length),
 		})
 	}
 
 	out.Sum = spec.foldPart(group, out.Name+"_sum", labels, length,
-		func(dist *DistributionSeries) *MetricSeries { return dist.Sum })
+		func(dist *store.DistributionSeries) *store.MetricSeries { return dist.Sum })
 	out.Count = spec.foldPart(group, out.Name+"_count", labels, length,
-		func(dist *DistributionSeries) *MetricSeries { return dist.Count })
+		func(dist *store.DistributionSeries) *store.MetricSeries { return dist.Count })
 	return out
 }
 
@@ -451,7 +456,7 @@ func (spec aggSpec) foldDistributions(group []*DistributionSeries) *Distribution
 // one target's bucket layout differs or a new bucket appears mid-run. A native
 // histogram has no bounds at all and so contributes nothing here; only its count
 // reaches the folded family.
-func unionBounds(group []*DistributionSeries) []float64 {
+func unionBounds(group []*store.DistributionSeries) []float64 {
 	seen := make(map[float64]bool)
 	bounds := make([]float64, 0, len(group[0].Points))
 	for _, dist := range group {
@@ -471,8 +476,8 @@ func unionBounds(group []*DistributionSeries) []float64 {
 // the group, returning nil when no member reports one. A nil Count is how the
 // view tells "the exporter publishes none" from "it publishes zero", so the fold
 // has to preserve that rather than produce an all-NaN series.
-func (spec aggSpec) foldPart(group []*DistributionSeries, name string, labels map[string]string, length int, pick func(*DistributionSeries) *MetricSeries) *MetricSeries {
-	members := make([]*MetricSeries, 0, len(group))
+func (spec aggSpec) foldPart(group []*store.DistributionSeries, name string, labels map[string]string, length int, pick func(*store.DistributionSeries) *store.MetricSeries) *store.MetricSeries {
+	members := make([]*store.MetricSeries, 0, len(group))
 	for _, dist := range group {
 		if series := pick(dist); series != nil {
 			members = append(members, series)
@@ -481,10 +486,10 @@ func (spec aggSpec) foldPart(group []*DistributionSeries, name string, labels ma
 	if len(members) == 0 {
 		return nil
 	}
-	return &MetricSeries{
+	return &store.MetricSeries{
 		Name:   name,
-		Kind:   KindCounter,
-		Labels: copyLabels(labels),
+		Kind:   store.KindCounter,
+		Labels: store.CopyLabels(labels),
 		Values: spec.foldValues(members, length),
 	}
 }
@@ -501,7 +506,7 @@ func (m model) distAggNote(entries []distEntry) string {
 		return fmt.Sprintf("%s ignored: sum only", spec.op)
 	}
 	for _, entry := range entries {
-		if entry.dist.Kind == KindSummary {
+		if entry.dist.Kind == store.KindSummary {
 			return "summaries not summed"
 		}
 	}

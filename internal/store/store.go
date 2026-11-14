@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"fmt"
@@ -14,6 +14,13 @@ import (
 // MetricKind identifies the OpenMetrics/Prometheus type a series originates from.
 // Gauge, counter and untyped metrics are scalars and live in Store.Metrics;
 // histograms and summaries are distributions and live in Store.Distributions.
+// Delta mode constants, as accepted by ValuesWithDeltas.
+const (
+	DeltaModeOff  = "off"
+	DeltaModeNext = "next"
+	DeltaModeView = "view"
+)
+
 type MetricKind int
 
 const (
@@ -64,7 +71,7 @@ type MetricSeries struct {
 // processes, so no delta is taken between them whatever the kind. nil means the
 // whole history is one epoch.
 func (s *MetricSeries) ValuesWithDeltas(mode string, epochs []int) []float64 {
-	if mode == "off" {
+	if mode == DeltaModeOff {
 		return s.Values
 	}
 
@@ -88,7 +95,7 @@ func (s *MetricSeries) ValuesWithDeltas(mode string, epochs []int) []float64 {
 	}
 
 	// Handle the current/last value based on mode
-	if mode == "view" {
+	if mode == DeltaModeView {
 		res[lastIdx] = s.viewSpan(epochs)
 	} else {
 		// In "next" mode, last element is absolute
@@ -201,8 +208,8 @@ type DistributionPoint struct {
 	Series *MetricSeries
 }
 
-// findPoint returns the series recorded for bound, or nil if bound is new.
-func (d *DistributionSeries) findPoint(bound float64) *MetricSeries {
+// FindPoint returns the series recorded for bound, or nil if bound is new.
+func (d *DistributionSeries) FindPoint(bound float64) *MetricSeries {
 	idx := sort.Search(len(d.Points), func(i int) bool { return d.Points[i].Bound >= bound })
 	if idx < len(d.Points) && d.Points[idx].Bound == bound {
 		return d.Points[idx].Series
@@ -210,19 +217,19 @@ func (d *DistributionSeries) findPoint(bound float64) *MetricSeries {
 	return nil
 }
 
-// insertPoint adds bound in sorted position. +Inf lands last on its own.
-func (d *DistributionSeries) insertPoint(bound float64, series *MetricSeries) {
+// InsertPoint adds bound in sorted position. +Inf lands last on its own.
+func (d *DistributionSeries) InsertPoint(bound float64, series *MetricSeries) {
 	idx := sort.Search(len(d.Points), func(i int) bool { return d.Points[i].Bound >= bound })
 	d.Points = append(d.Points, DistributionPoint{})
 	copy(d.Points[idx+1:], d.Points[idx:])
 	d.Points[idx] = DistributionPoint{Bound: bound, Series: series}
 }
 
-// eachSeries calls fn for every series held by the distribution, passing a key
+// EachSeries calls fn for every series held by the distribution, passing a key
 // that is unique across the whole store. The key is structural rather than built
 // from the display name, so a histogram "foo" and a real counter named
 // "foo_count" cannot collide in the bookkeeping.
-func (d *DistributionSeries) eachSeries(sig string, fn func(key string, series *MetricSeries)) {
+func (d *DistributionSeries) EachSeries(sig string, fn func(key string, series *MetricSeries)) {
 	for _, point := range d.Points {
 		fn(distPointKey(sig, point.Bound), point.Series)
 	}
@@ -235,12 +242,12 @@ func (d *DistributionSeries) eachSeries(sig string, fn func(key string, series *
 }
 
 func distPointKey(sig string, bound float64) string {
-	return sig + "|point|" + formatBound(bound)
+	return sig + "|point|" + FormatBound(bound)
 }
 
-// formatBound renders a bucket bound or quantile the way the text format does,
+// FormatBound renders a bucket bound or quantile the way the text format does,
 // so "le=1" stays "1" rather than becoming "1.0".
-func formatBound(bound float64) string {
+func FormatBound(bound float64) string {
 	if math.IsInf(bound, +1) {
 		return "+Inf"
 	}
@@ -391,7 +398,7 @@ func (s *Store) UpdateFromFamilies(families map[string]*dto.MetricFamily, at tim
 		}
 	}
 	for sig, dist := range s.Distributions {
-		dist.eachSeries(sig, func(key string, series *MetricSeries) {
+		dist.EachSeries(sig, func(key string, series *MetricSeries) {
 			if !seenSignatures[key] {
 				s.appendValue(series, math.NaN())
 			}
@@ -435,10 +442,10 @@ func (s *Store) updateDistribution(name string, kind MetricKind, labels map[stri
 			// point on every scrape. Exporters should not emit one.
 			continue
 		}
-		series := dist.findPoint(point.bound)
+		series := dist.FindPoint(point.bound)
 		if series == nil {
-			series = s.newSeries(pointName, pointKind, withLabel(labels, pointLabel, formatBound(point.bound)))
-			dist.insertPoint(point.bound, series)
+			series = s.newSeries(pointName, pointKind, WithLabel(labels, pointLabel, FormatBound(point.bound)))
+			dist.InsertPoint(point.bound, series)
 		}
 		s.appendValue(series, point.value)
 		seenSignatures[distPointKey(sig, point.bound)] = true
@@ -446,14 +453,14 @@ func (s *Store) updateDistribution(name string, kind MetricKind, labels map[stri
 
 	if sum, ok := sampleSum(metric); ok {
 		if dist.Sum == nil {
-			dist.Sum = s.newSeries(name+"_sum", KindCounter, copyLabels(labels))
+			dist.Sum = s.newSeries(name+"_sum", KindCounter, CopyLabels(labels))
 		}
 		s.appendValue(dist.Sum, sum)
 		seenSignatures[sig+"|sum"] = true
 	}
 	if count, ok := sampleCount(metric); ok {
 		if dist.Count == nil {
-			dist.Count = s.newSeries(name+"_count", KindCounter, copyLabels(labels))
+			dist.Count = s.newSeries(name+"_count", KindCounter, CopyLabels(labels))
 		}
 		s.appendValue(dist.Count, count)
 		seenSignatures[sig+"|count"] = true
@@ -544,7 +551,7 @@ func metricLabels(metric *dto.Metric) map[string]string {
 	return labels
 }
 
-func copyLabels(labels map[string]string) map[string]string {
+func CopyLabels(labels map[string]string) map[string]string {
 	res := make(map[string]string, len(labels))
 	for k, v := range labels {
 		res[k] = v
@@ -552,13 +559,27 @@ func copyLabels(labels map[string]string) map[string]string {
 	return res
 }
 
-// withLabel copies labels and adds one. Every series owns its own label map, so
+// WithLabel copies labels and adds one. Every series owns its own label map, so
 // the family's map is never shared with the buckets derived from it.
-func withLabel(labels map[string]string, key, value string) map[string]string {
+func WithLabel(labels map[string]string, key, value string) map[string]string {
 	res := make(map[string]string, len(labels)+1)
 	for k, v := range labels {
 		res[k] = v
 	}
 	res[key] = value
 	return res
+}
+
+// IsStatic reports whether nothing in the family moves, so the hide-static
+// toggle drops a distribution only when every bucket, the sum and the count are
+// all unchanging.
+func (d *DistributionSeries) IsStatic() bool {
+	static, seen := true, false
+	d.EachSeries("", func(_ string, series *MetricSeries) {
+		seen = true
+		if !series.IsStatic() {
+			static = false
+		}
+	})
+	return seen && static
 }

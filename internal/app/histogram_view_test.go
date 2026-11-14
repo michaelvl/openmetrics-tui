@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"regexp"
@@ -10,6 +10,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 	dto "github.com/prometheus/client_model/go"
+
+	"github.com/michaelvl/openmetrics-tui/internal/histogram"
+	"github.com/michaelvl/openmetrics-tui/internal/store"
+
+	"github.com/michaelvl/openmetrics-tui/internal/testutil"
 )
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -36,22 +41,22 @@ func plain(s string) string { return ansiPattern.ReplaceAllString(s, "") }
 // distModel builds a model in the distribution view, fed the given scrapes.
 func distModel(t *testing.T, width int, texts ...string) model {
 	t.Helper()
-	store := NewStore(10)
+	st := store.NewStore(10)
 	for _, text := range texts {
-		store.UpdateFromFamilies(parseFamilies(t, text), time.Time{})
+		st.UpdateFromFamilies(testutil.ParseFamilies(t, text), time.Time{})
 	}
 	m := model{
 		cfg: Config{
 			Interval:  5 * time.Second,
 			History:   10,
 			LabelMode: LabelModeShowAll,
-			DeltaMode: DeltaModeOff,
+			DeltaMode: store.DeltaModeOff,
 		},
-		store:         store,
+		store:         st,
 		width:         width,
 		height:        24,
 		view:          ViewDistributions,
-		bucketMode:    BucketModePerBucket,
+		bucketMode:    histogram.BucketModePerBucket,
 		expanded:      make(map[string]bool),
 		viewport:      viewport.New(width, 20),
 		viewportReady: true,
@@ -79,7 +84,7 @@ lat_seconds_bucket{le="1"} 115
 lat_seconds_bucket{le="+Inf"} 120
 lat_seconds_count 120
 `
-	m := distModel(t, 120, latencyFixture, second)
+	m := distModel(t, 120, testutil.LatencyFixture, second)
 	rows := distRows(t, m)
 	if len(rows) != 1 {
 		t.Fatalf("got %d rows, want 1:\n%v", len(rows), rows)
@@ -104,7 +109,7 @@ lat_seconds_count 120
 // Summaries report their quantiles, so the collapsed line must read them off
 // rather than deriving anything.
 func TestCollapsedSummaryLineReadsReportedQuantiles(t *testing.T) {
-	m := distModel(t, 120, summaryFixture)
+	m := distModel(t, 120, testutil.SummaryFixture)
 	got := strings.Fields(plain(distRows(t, m)[0]))
 	if len(got) < 7 {
 		t.Fatalf("row = %q, want at least 7 fields", got)
@@ -119,8 +124,8 @@ func TestCollapsedSummaryLineReadsReportedQuantiles(t *testing.T) {
 func TestCollapsedLineWorksForANativeHistogram(t *testing.T) {
 	count, sum := uint64(400), 12.5
 	schema, zeroThreshold, zeroCount := int32(0), 0.001, uint64(0)
-	store := NewStore(10)
-	store.UpdateFromFamilies(map[string]*dto.MetricFamily{
+	st := store.NewStore(10)
+	st.UpdateFromFamilies(map[string]*dto.MetricFamily{
 		"native_seconds": {
 			Name: strPtr("native_seconds"),
 			Type: dto.MetricType_HISTOGRAM.Enum(),
@@ -139,7 +144,7 @@ func TestCollapsedLineWorksForANativeHistogram(t *testing.T) {
 	}, time.Time{})
 
 	m := distModel(t, 120)
-	m.store = store
+	m.store = st
 	m.refresh()
 
 	got := strings.Fields(plain(distRows(t, m)[0]))
@@ -268,16 +273,16 @@ lat_seconds_count{handler="/api/v1/products/search/suggestions",method="GET"} 4
 }
 
 func TestBucketModeCyclesBackToWhereItStarted(t *testing.T) {
-	mode := BucketModePerBucket
-	seen := map[BucketMode]bool{}
+	mode := histogram.BucketModePerBucket
+	seen := map[histogram.BucketMode]bool{}
 	for i := 0; i < 2; i++ {
 		seen[mode] = true
-		mode = mode.next()
+		mode = mode.Next()
 	}
 	if len(seen) != 2 {
 		t.Errorf("cycling visited %d modes, want both", len(seen))
 	}
-	if mode != BucketModePerBucket {
+	if mode != histogram.BucketModePerBucket {
 		t.Errorf("two steps landed on %v, want to be back at the start", mode)
 	}
 }
@@ -286,7 +291,7 @@ func TestBucketModeCyclesBackToWhereItStarted(t *testing.T) {
 func TestViewToggleIsARoundTrip(t *testing.T) {
 	m := distModel(t, 120, threeFamilies)
 	m.view = ViewMetrics
-	m.store.UpdateFromFamilies(parseFamilies(t, "# TYPE g gauge\ng 1\n"), time.Time{})
+	m.store.UpdateFromFamilies(testutil.ParseFamilies(t, "# TYPE g gauge\ng 1\n"), time.Time{})
 	m.refresh()
 
 	m.toggleView()
@@ -415,7 +420,7 @@ lat_seconds_count 30
 other_total 1
 `
 	m := distModel(t, 120, present, gone, gone)
-	m.bucketMode = BucketModeCumulative
+	m.bucketMode = histogram.BucketModeCumulative
 	expandAll(&m)
 
 	rows := gridRows(t, m)
@@ -437,7 +442,7 @@ other_total 1
 // the same scale would read a large p99 as a busy bucket.
 func TestSummaryGridIsNotShaded(t *testing.T) {
 	withColor(t)
-	m := distModel(t, 120, summaryFixture)
+	m := distModel(t, 120, testutil.SummaryFixture)
 	expandAll(&m)
 
 	// The paired positive is TestBusierBucketsShadeBrighter, which proves under
@@ -460,7 +465,7 @@ lat_seconds_count 501
 `
 	withColor(t)
 	m := distModel(t, 120, busy)
-	m.bucketMode = BucketModePerBucket
+	m.bucketMode = histogram.BucketModePerBucket
 	expandAll(&m)
 
 	rows := gridRows(t, m)
@@ -489,8 +494,8 @@ lat_seconds_count 501
 func TestNativeHistogramExplainsTheEmptyGrid(t *testing.T) {
 	count, sum := uint64(400), 12.5
 	schema, zeroThreshold, zeroCount := int32(0), 0.001, uint64(0)
-	store := NewStore(10)
-	store.UpdateFromFamilies(map[string]*dto.MetricFamily{
+	st := store.NewStore(10)
+	st.UpdateFromFamilies(map[string]*dto.MetricFamily{
 		"native_seconds": {
 			Name: strPtr("native_seconds"),
 			Type: dto.MetricType_HISTOGRAM.Enum(),
@@ -509,7 +514,7 @@ func TestNativeHistogramExplainsTheEmptyGrid(t *testing.T) {
 	}, time.Time{})
 
 	m := distModel(t, 120)
-	m.store = store
+	m.store = st
 	expandAll(&m)
 
 	content, _ := m.renderDistributions()
@@ -651,7 +656,7 @@ lat_seconds_count{handler="/api/v1/products/search/suggestions"} 9
 // An exporter that publishes only histograms would otherwise look like an
 // exporter that publishes nothing.
 func TestEmptyMetricsViewPointsAtTheDistributions(t *testing.T) {
-	m := distModel(t, 120, latencyFixture)
+	m := distModel(t, 120, testutil.LatencyFixture)
 	m.view = ViewMetrics
 
 	got := plain(m.buildTable())

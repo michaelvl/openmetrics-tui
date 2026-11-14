@@ -1,4 +1,4 @@
-package main
+package fetch
 
 import (
 	"math"
@@ -10,6 +10,10 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+
+	"github.com/michaelvl/openmetrics-tui/internal/store"
+
+	"github.com/michaelvl/openmetrics-tui/internal/testutil"
 )
 
 // serveText exposes a fixture as classic Prometheus text.
@@ -51,20 +55,20 @@ func serveProto(t *testing.T, families map[string]*dto.MetricFamily) *httptest.S
 // Both wire formats must land in the store identically - the store never sees the
 // _bucket/_sum/_count name mangling that only the text format has.
 func TestFetchReachesSameStoreOverTextAndProtobuf(t *testing.T) {
-	fixture := parseFamilies(t, histogramFixture)
+	fixture := testutil.ParseFamilies(t, testutil.HistogramFixture)
 
-	stores := map[string]*Store{}
+	stores := map[string]*store.Store{}
 	for name, url := range map[string]string{
-		"text":  serveText(t, histogramFixture).URL,
+		"text":  serveText(t, testutil.HistogramFixture).URL,
 		"proto": serveProto(t, fixture).URL,
 	} {
 		families, err := NewFetcher(url).Fetch()
 		if err != nil {
 			t.Fatalf("%s: Fetch: %v", name, err)
 		}
-		store := NewStore(10)
-		store.UpdateFromFamilies(families, time.Time{})
-		stores[name] = store
+		st := store.NewStore(10)
+		st.UpdateFromFamilies(families, time.Time{})
+		stores[name] = st
 	}
 
 	text, proto := stores["text"], stores["proto"]
@@ -76,7 +80,7 @@ func TestFetchReachesSameStoreOverTextAndProtobuf(t *testing.T) {
 	sig := `request_duration_seconds{method="GET"}`
 	textDist, protoDist := text.Distributions[sig], proto.Distributions[sig]
 	if textDist == nil || protoDist == nil {
-		t.Fatalf("histogram missing: text=%v proto=%v", keysOf(text.Distributions), keysOf(proto.Distributions))
+		t.Fatalf("histogram missing: text=%v proto=%v", testutil.KeysOf(text.Distributions), testutil.KeysOf(proto.Distributions))
 	}
 	if len(textDist.Points) != len(protoDist.Points) {
 		t.Fatalf("bucket counts differ: %v vs %v", boundsOf(textDist), boundsOf(protoDist))
@@ -124,12 +128,12 @@ func TestNativeHistogramYieldsNoBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	store := NewStore(10)
-	store.UpdateFromFamilies(families, time.Time{})
+	st := store.NewStore(10)
+	st.UpdateFromFamilies(families, time.Time{})
 
-	dist := store.Distributions[`latency_seconds{}`]
+	dist := st.Distributions[`latency_seconds{}`]
 	if dist == nil {
-		t.Fatalf("native histogram dropped entirely, have %v", keysOf(store.Distributions))
+		t.Fatalf("native histogram dropped entirely, have %v", testutil.KeysOf(st.Distributions))
 	}
 	if len(dist.Points) != 0 {
 		t.Errorf("expected no classic buckets, got %v", boundsOf(dist))
@@ -166,12 +170,12 @@ func TestFetchKeepsUTF8MetricNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	store := NewStore(10)
-	store.UpdateFromFamilies(families, time.Time{})
+	st := store.NewStore(10)
+	st.UpdateFromFamilies(families, time.Time{})
 
-	series := store.Metrics[`requests.total{}`]
+	series := st.Metrics[`requests.total{}`]
 	if series == nil {
-		t.Fatalf("dotted metric name rejected, have %v", keysOf(store.Metrics))
+		t.Fatalf("dotted metric name rejected, have %v", testutil.KeysOf(st.Metrics))
 	}
 	if series.Values[0] != 42 || math.IsNaN(series.Values[0]) {
 		t.Errorf("value = %v, want 42", series.Values)
@@ -181,3 +185,11 @@ func TestFetchKeepsUTF8MetricNames(t *testing.T) {
 func strPtr(s string) *string    { return &s }
 func int32Ptr(v int32) *int32    { return &v }
 func uint32Ptr(v uint32) *uint32 { return &v }
+
+func boundsOf(d *store.DistributionSeries) []float64 {
+	bounds := make([]float64, 0, len(d.Points))
+	for _, point := range d.Points {
+		bounds = append(bounds, point.Bound)
+	}
+	return bounds
+}

@@ -1,43 +1,16 @@
-package main
+package store
 
 import (
 	"math"
-	"strings"
 	"testing"
 	"time"
 
-	dto "github.com/prometheus/client_model/go"
-	"github.com/prometheus/common/expfmt"
-	promModel "github.com/prometheus/common/model"
+	"github.com/michaelvl/openmetrics-tui/internal/testutil"
 )
-
-// parseFamilies turns an exposition text fixture into the families the fetcher
-// hands to the store.
-func parseFamilies(t *testing.T, text string) map[string]*dto.MetricFamily {
-	t.Helper()
-	parser := expfmt.NewTextParser(promModel.UTF8Validation)
-	families, err := parser.TextToMetricFamilies(strings.NewReader(text))
-	if err != nil {
-		t.Fatalf("parsing fixture: %v", err)
-	}
-	return families
-}
-
-const histogramFixture = `# TYPE requests_in_flight gauge
-requests_in_flight 7
-# TYPE requests_total counter
-requests_total 1500
-# TYPE request_duration_seconds histogram
-request_duration_seconds_bucket{method="GET",le="0.05"} 1203
-request_duration_seconds_bucket{method="GET",le="1"} 4991
-request_duration_seconds_bucket{method="GET",le="+Inf"} 5000
-request_duration_seconds_sum{method="GET"} 612.44
-request_duration_seconds_count{method="GET"} 5000
-`
 
 func TestDistributionsAreKeptOutOfSimpleMetrics(t *testing.T) {
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, histogramFixture), time.Time{})
+	store.UpdateFromFamilies(testutil.ParseFamilies(t, testutil.HistogramFixture), time.Time{})
 
 	var names []string
 	for _, series := range store.Metrics {
@@ -58,7 +31,7 @@ func TestDistributionsAreKeptOutOfSimpleMetrics(t *testing.T) {
 	}
 	dist := store.Distributions[`request_duration_seconds{method="GET"}`]
 	if dist == nil {
-		t.Fatalf("histogram not found, have %v", keysOf(store.Distributions))
+		t.Fatalf("histogram not found, have %v", testutil.KeysOf(store.Distributions))
 	}
 	if dist.Kind != KindHistogram {
 		t.Errorf("Kind = %v, want histogram", dist.Kind)
@@ -73,7 +46,7 @@ func TestDistributionsAreKeptOutOfSimpleMetrics(t *testing.T) {
 
 func TestBucketsAreSortedAndNamedLikeTheWireFormat(t *testing.T) {
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, histogramFixture), time.Time{})
+	store.UpdateFromFamilies(testutil.ParseFamilies(t, testutil.HistogramFixture), time.Time{})
 	dist := store.Distributions[`request_duration_seconds{method="GET"}`]
 
 	wantBounds := []float64{0.05, 1, math.Inf(+1)}
@@ -115,9 +88,9 @@ func TestBucketsAreSortedAndNamedLikeTheWireFormat(t *testing.T) {
 // Values always refers to the same scrape no matter which series it came from.
 func TestScrapesStayAlignedWhenAFamilyDisappears(t *testing.T) {
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, histogramFixture), time.Time{})
-	store.UpdateFromFamilies(parseFamilies(t, histogramFixture), time.Time{})
-	store.UpdateFromFamilies(parseFamilies(t, "# TYPE requests_in_flight gauge\nrequests_in_flight 9\n"), time.Time{})
+	store.UpdateFromFamilies(testutil.ParseFamilies(t, testutil.HistogramFixture), time.Time{})
+	store.UpdateFromFamilies(testutil.ParseFamilies(t, testutil.HistogramFixture), time.Time{})
+	store.UpdateFromFamilies(testutil.ParseFamilies(t, "# TYPE requests_in_flight gauge\nrequests_in_flight 9\n"), time.Time{})
 
 	for sig, series := range store.Metrics {
 		if len(series.Values) != 3 {
@@ -129,7 +102,7 @@ func TestScrapesStayAlignedWhenAFamilyDisappears(t *testing.T) {
 	}
 
 	dist := store.Distributions[`request_duration_seconds{method="GET"}`]
-	dist.eachSeries("sig", func(key string, series *MetricSeries) {
+	dist.EachSeries("sig", func(key string, series *MetricSeries) {
 		if len(series.Values) != 3 {
 			t.Errorf("%s has %d values, want 3", key, len(series.Values))
 			return
@@ -143,42 +116,6 @@ func TestScrapesStayAlignedWhenAFamilyDisappears(t *testing.T) {
 	}
 }
 
-// A bucket the exporter starts reporting mid-run has a shorter history. The table
-// renders values right-aligned, so it still lines up under the current column.
-func TestBucketAppearingMidRunIsRightAligned(t *testing.T) {
-	const withoutBucket = `# TYPE request_duration_seconds histogram
-request_duration_seconds_bucket{le="0.05"} 10
-request_duration_seconds_bucket{le="+Inf"} 20
-`
-	const withBucket = `# TYPE request_duration_seconds histogram
-request_duration_seconds_bucket{le="0.05"} 11
-request_duration_seconds_bucket{le="0.5"} 15
-request_duration_seconds_bucket{le="+Inf"} 22
-`
-	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, withoutBucket), time.Time{})
-	store.UpdateFromFamilies(parseFamilies(t, withoutBucket), time.Time{})
-	store.UpdateFromFamilies(parseFamilies(t, withBucket), time.Time{})
-
-	dist := store.Distributions[`request_duration_seconds{}`]
-	if len(dist.Points) != 3 || dist.Points[1].Bound != 0.5 {
-		t.Fatalf("new bucket not inserted in sorted position: %v", boundsOf(dist))
-	}
-	newSeries := dist.Points[1].Series
-	if len(newSeries.Values) != 1 {
-		t.Fatalf("new bucket should start fresh, got %v", newSeries.Values)
-	}
-
-	m := model{cfg: Config{History: 3, DeltaMode: DeltaModeOff, LabelMode: LabelModeHideAll}, store: store}
-	rows := m.buildTableRows([]*MetricSeries{newSeries, dist.Points[0].Series})
-	if got := rows[0]; len(got) != 4 || got[1] != "" || got[2] != "" || got[3] != "15" {
-		t.Errorf("new bucket row = %q, want the value in the current column", got)
-	}
-	if got := rows[1]; len(got) != 4 || got[3] != "11" {
-		t.Errorf("established bucket row = %q, want its current value in the same column", got)
-	}
-}
-
 func TestSummaryQuantilesAreGauges(t *testing.T) {
 	const fixture = `# TYPE rpc_duration_seconds summary
 rpc_duration_seconds{quantile="0.5"} 0.12
@@ -186,11 +123,11 @@ rpc_duration_seconds{quantile="0.99"} 0.42
 rpc_duration_seconds_count 12
 `
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, fixture), time.Time{})
+	store.UpdateFromFamilies(testutil.ParseFamilies(t, fixture), time.Time{})
 
 	dist := store.Distributions[`rpc_duration_seconds{}`]
 	if dist == nil {
-		t.Fatalf("summary not found, have %v", keysOf(store.Distributions))
+		t.Fatalf("summary not found, have %v", testutil.KeysOf(store.Distributions))
 	}
 	if dist.Kind != KindSummary {
 		t.Errorf("Kind = %v, want summary", dist.Kind)
@@ -211,7 +148,7 @@ rpc_duration_seconds_count 12
 		t.Errorf("quantile label = %q, want 0.99", got)
 	}
 	if len(store.Metrics) != 0 {
-		t.Errorf("summary leaked into the simple metrics: %v", keysOf(store.Metrics))
+		t.Errorf("summary leaked into the simple metrics: %v", testutil.KeysOf(store.Metrics))
 	}
 }
 
@@ -223,7 +160,7 @@ rpc_duration_seconds{quantile="0.5"} 0.12
 rpc_duration_seconds_count 12
 `
 	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, fixture), time.Time{})
+	store.UpdateFromFamilies(testutil.ParseFamilies(t, fixture), time.Time{})
 
 	dist := store.Distributions[`rpc_duration_seconds{}`]
 	if dist.Sum != nil {
@@ -237,7 +174,7 @@ rpc_duration_seconds_count 12
 func TestHistoryLimitPrunesBuckets(t *testing.T) {
 	store := NewStore(2)
 	for i := 0; i < 4; i++ {
-		store.UpdateFromFamilies(parseFamilies(t, histogramFixture), time.Time{})
+		store.UpdateFromFamilies(testutil.ParseFamilies(t, testutil.HistogramFixture), time.Time{})
 	}
 	dist := store.Distributions[`request_duration_seconds{method="GET"}`]
 	for _, point := range dist.Points {
@@ -258,8 +195,8 @@ func TestFormatBound(t *testing.T) {
 		2.5e-07:      "2.5e-07",
 	}
 	for bound, want := range cases {
-		if got := formatBound(bound); got != want {
-			t.Errorf("formatBound(%v) = %q, want %q", bound, got, want)
+		if got := FormatBound(bound); got != want {
+			t.Errorf("FormatBound(%v) = %q, want %q", bound, got, want)
 		}
 	}
 }
@@ -325,12 +262,12 @@ func TestFailedScrapesStartANewEpoch(t *testing.T) {
 
 	// A failure before anything was scraped separates nothing.
 	store.MarkBreak()
-	store.UpdateFromFamilies(parseFamilies(t, fixture), t0)
+	store.UpdateFromFamilies(testutil.ParseFamilies(t, fixture), t0)
 	// Consecutive failures are one outage, so one break.
 	store.MarkBreak()
 	store.MarkBreak()
-	store.UpdateFromFamilies(parseFamilies(t, fixture), t0.Add(30*time.Second))
-	store.UpdateFromFamilies(parseFamilies(t, fixture), t0.Add(35*time.Second))
+	store.UpdateFromFamilies(testutil.ParseFamilies(t, fixture), t0.Add(30*time.Second))
+	store.UpdateFromFamilies(testutil.ParseFamilies(t, fixture), t0.Add(35*time.Second))
 
 	if got, want := store.Epochs(3), []int{0, 1, 1}; !equalInts(got, want) {
 		t.Errorf("epochs = %v, want %v", got, want)
@@ -350,7 +287,7 @@ func TestFailedScrapesStartANewEpoch(t *testing.T) {
 func TestScrapeLogIsPrunedWithTheHistory(t *testing.T) {
 	store := NewStore(2)
 	for i := 0; i < 5; i++ {
-		store.UpdateFromFamilies(parseFamilies(t, "# TYPE g gauge\ng 1\n"), time.Unix(int64(i), 0))
+		store.UpdateFromFamilies(testutil.ParseFamilies(t, "# TYPE g gauge\ng 1\n"), time.Unix(int64(i), 0))
 	}
 	if len(store.Scrapes) != 2 || len(store.Metrics[`g{}`].Values) != 2 {
 		t.Fatalf("scrapes = %d, values = %d, want 2 each", len(store.Scrapes), len(store.Metrics[`g{}`].Values))
@@ -408,20 +345,4 @@ func equalInts(a, b []int) bool {
 		}
 	}
 	return true
-}
-
-func keysOf[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
-func boundsOf(d *DistributionSeries) []float64 {
-	bounds := make([]float64, 0, len(d.Points))
-	for _, point := range d.Points {
-		bounds = append(bounds, point.Bound)
-	}
-	return bounds
 }

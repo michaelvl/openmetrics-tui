@@ -4,17 +4,17 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 
 ## Phase 0: restructure repo (one commit, no behaviour change)
 
-- [ ] Create `cmd/omtui/main.go` as thin entry point calling `internal/app`
-- [ ] Move model/Update/View/flags to `internal/app`
+- [x] Create `cmd/omtui/main.go` as thin entry point calling `internal/app`
+- [x] Move model/Update/View/flags to `internal/app`
 - [ ] `git mv` independent files: `store`, `fetch`, `filter`, `histogram`, `header`
-- [ ] Decide on `aggregate` (stays in `app` or small interface; it has `model` methods)
-- [ ] Export only names that cross package boundaries
-- [ ] Move tests with their files
-- [ ] `Makefile`: `BINARY_NAME=omtui`, build `./cmd/omtui`, update `clean`/`run`
-- [ ] `flake.nix`: `pname`, `mainProgram`, `subPackages = [ "cmd/omtui" ]`, refresh `vendorHash`
-- [ ] `README.md`: install command and binary name in examples (note the breaking rename)
-- [ ] `README-AGENT-CONSUMERS.md` and `.gitignore`: binary name
-- [ ] Verify `make build test lint` and `nix build`; no Go code left in repo root
+- [x] Decide on `aggregate` (stays in `app` or small interface; it has `model` methods)
+- [x] Export only names that cross package boundaries
+- [x] Move tests with their files
+- [x] `Makefile`: `BINARY_NAME=omtui`, build `./cmd/omtui`, update `clean`/`run`
+- [x] `flake.nix`: `pname`, `mainProgram`, `subPackages = [ "cmd/omtui" ]`, refresh `vendorHash`
+- [x] `README.md`: install command and binary name in examples (note the breaking rename)
+- [x] `README-AGENT-CONSUMERS.md` and `.gitignore`: binary name
+- [x] Verify `make build test lint` and `nix build`; no Go code left in repo root
 
 ## Phase 1: Prometheus API client (`internal/promapi`)
 

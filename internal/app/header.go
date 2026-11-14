@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -6,6 +6,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/michaelvl/openmetrics-tui/internal/filter"
+
+	"github.com/michaelvl/openmetrics-tui/internal/textutil"
 )
 
 // headerHeight is the number of screen rows the header bar occupies. It never
@@ -111,9 +115,9 @@ func (m model) fieldValue(f headerField) string {
 func validateField(f headerField, value string) error {
 	switch f {
 	case fieldMetricFilter:
-		return validateMetricFilter(value)
+		return filter.ValidateMetricFilter(value)
 	case fieldLabelFilter:
-		return validateLabelFilter(value)
+		return filter.ValidateLabelFilter(value)
 	case fieldAggregation:
 		return validateAggregation(value)
 	}
@@ -243,9 +247,9 @@ func (m model) renderHeaderBox(field headerField, width int) string {
 		m.input.SetCursor(m.input.Position())
 		value = m.input.View()
 	} else if raw := m.fieldValue(field); raw == "" {
-		value = lipgloss.NewStyle().Faint(true).Render(truncateToWidth("—", inner))
+		value = lipgloss.NewStyle().Faint(true).Render(textutil.TruncateToWidth("—", inner))
 	} else {
-		value = truncateToWidth(raw, inner)
+		value = textutil.TruncateToWidth(raw, inner)
 	}
 
 	captionStyle := lipgloss.NewStyle().Faint(true)
@@ -287,34 +291,6 @@ func headerBoxTop(field headerField, inner int, borderStyle, captionStyle lipglo
 		borderStyle.Render(" ├"+strings.Repeat(b.Top, fill)+b.TopRight)
 }
 
-// truncateToWidth cuts a string to at most width display cells, marking the cut
-// with an ellipsis. Unlike truncateMessage, which the footer uses, it honours
-// widths below four - the header's boxes get a third of the terminal each and
-// can be very narrow.
-func truncateToWidth(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if lipgloss.Width(s) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	runes := []rune(s)
-	out := make([]rune, 0, len(runes))
-	used := 0
-	for _, r := range runes {
-		w := lipgloss.Width(string(r))
-		if used+w > width-1 {
-			break
-		}
-		out = append(out, r)
-		used += w
-	}
-	return string(out) + "…"
-}
-
 // minHintWidth is the least the edit hint will shrink to. Below it the hint says
 // nothing at all, and a terminal that narrow has bigger problems.
 const minHintWidth = 12
@@ -339,5 +315,5 @@ func (m model) headerHint(width int) string {
 		text = fmt.Sprintf("⚠ %s: %s", m.editing.caption(), m.inputErr)
 		style = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	}
-	return style.Render(truncateToWidth(text, max(width, minHintWidth)))
+	return style.Render(textutil.TruncateToWidth(text, max(width, minHintWidth)))
 }

@@ -1,7 +1,8 @@
-package main
+package app
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -9,17 +10,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+
+	"github.com/michaelvl/openmetrics-tui/internal/store"
+
+	"github.com/michaelvl/openmetrics-tui/internal/testutil"
 )
 
 // Headers read the scrape log, so an outage or a pause shows as a jump between
 // neighbouring columns rather than being hidden behind evenly spaced labels.
 func TestColumnHeadersShowRealScrapeAges(t *testing.T) {
-	store := NewStore(10)
+	st := store.NewStore(10)
 	t0 := time.Unix(1000, 0)
 	for _, at := range []time.Duration{0, 5 * time.Second, 155 * time.Second, 160 * time.Second} {
-		store.UpdateFromFamilies(parseFamilies(t, "# TYPE g gauge\ng 1\n"), t0.Add(at))
+		st.UpdateFromFamilies(testutil.ParseFamilies(t, "# TYPE g gauge\ng 1\n"), t0.Add(at))
 	}
-	m := model{cfg: Config{Interval: 5 * time.Second}, store: store}
+	m := model{cfg: Config{Interval: 5 * time.Second}, store: st}
 
 	got := m.columnHeaders(6)
 	// The two leftmost columns have no scrape yet. They carry on back from the
@@ -60,14 +65,14 @@ func TestOlderEpochColumnsUseTheAlternateStyle(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI256)
 	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
 
-	store := NewStore(10)
-	store.UpdateFromFamilies(parseFamilies(t, "# TYPE g gauge\ng 7\n"), time.Unix(0, 0))
-	store.MarkBreak()
-	store.UpdateFromFamilies(parseFamilies(t, "# TYPE g gauge\ng 8\n"), time.Unix(60, 0))
-	store.UpdateFromFamilies(parseFamilies(t, "# TYPE g gauge\ng 9\n"), time.Unix(65, 0))
+	st := store.NewStore(10)
+	st.UpdateFromFamilies(testutil.ParseFamilies(t, "# TYPE g gauge\ng 7\n"), time.Unix(0, 0))
+	st.MarkBreak()
+	st.UpdateFromFamilies(testutil.ParseFamilies(t, "# TYPE g gauge\ng 8\n"), time.Unix(60, 0))
+	st.UpdateFromFamilies(testutil.ParseFamilies(t, "# TYPE g gauge\ng 9\n"), time.Unix(65, 0))
 
-	m := model{cfg: Config{History: 3, DeltaMode: DeltaModeOff, LabelMode: LabelModeHideAll}, store: store}
-	row := m.buildTableRows([]*MetricSeries{store.Metrics[`g{}`]})[0]
+	m := model{cfg: Config{History: 3, DeltaMode: store.DeltaModeOff, LabelMode: LabelModeHideAll}, store: st}
+	row := m.buildTableRows([]*store.MetricSeries{st.Metrics[`g{}`]})[0]
 	if row[1] != epochValueStyle.Render("7") {
 		t.Errorf("pre-break cell = %q, want it in the epoch style", row[1])
 	}
@@ -151,7 +156,7 @@ func TestReconnectRetriesOnItsOwnInterval(t *testing.T) {
 	}
 
 	gen = m.tickGen
-	next, cmd = m.Update(scrapeResult{families: parseFamilies(t, twoGauges), at: time.Now()})
+	next, cmd = m.Update(scrapeResult{families: testutil.ParseFamilies(t, twoGauges), at: time.Now()})
 	m = next.(model)
 	if cmd == nil || m.tickGen == gen {
 		t.Fatalf("reconnecting should start a new tick chain (gen %d -> %d, cmd %v)", gen, m.tickGen, cmd)
@@ -162,7 +167,7 @@ func TestReconnectRetriesOnItsOwnInterval(t *testing.T) {
 
 	// A scrape while connected leaves the running chain alone.
 	gen = m.tickGen
-	next, _ = m.Update(scrapeResult{families: parseFamilies(t, twoGauges), at: time.Now()})
+	next, _ = m.Update(scrapeResult{families: testutil.ParseFamilies(t, twoGauges), at: time.Now()})
 	if next.(model).tickGen != gen {
 		t.Error("a scrape while connected restarted the tick chain")
 	}
@@ -191,7 +196,7 @@ func TestTickSkipsTheFetchWhileOneIsOut(t *testing.T) {
 		t.Error("a second fetch was issued while one was out")
 	}
 
-	next, _ = next.(model).Update(scrapeResult{families: parseFamilies(t, twoGauges), at: time.Now()})
+	next, _ = next.(model).Update(scrapeResult{families: testutil.ParseFamilies(t, twoGauges), at: time.Now()})
 	if next.(model).fetching {
 		t.Error("a completed fetch left the flag set")
 	}
@@ -209,3 +214,67 @@ func TestMinusTypesIntoAnOpenFilter(t *testing.T) {
 		t.Errorf("interval changed to %v while editing", m.cfg.Interval)
 	}
 }
+
+func TestFormatFloatKeepsSmallValuesVisible(t *testing.T) {
+	cases := []struct {
+		val  float64
+		want string
+	}{
+		// The bug this replaced: %.2f rounded all of these to "0".
+		{0.0034, "0.0034"},
+		{0.08, "0.08"},
+		{0.0001234, "0.000123"},
+		// Integers stay exact rather than being abbreviated or rounded.
+		{21203, "21203"},
+		{0, "0"},
+		{-7, "-7"},
+		// Fractions carry three significant digits without losing integer digits.
+		{1.23456, "1.23"},
+		{12.3456, "12.3"},
+		{123.456, "123"},
+		{1234.56, "1235"},
+		{-0.0034, "-0.0034"},
+	}
+	for _, tc := range cases {
+		if got := formatFloat(tc.val); got != tc.want {
+			t.Errorf("formatFloat(%v) = %q, want %q", tc.val, got, tc.want)
+		}
+	}
+}
+
+// The delta rendering in the metrics table keys off the exact strings "0" and
+// "-0" to blank an unchanged value out.
+func TestFormatFloatKeepsZeroSpelledTheSameWay(t *testing.T) {
+	if got := formatFloat(0); got != "0" {
+		t.Errorf("formatFloat(0) = %q, want %q", got, "0")
+	}
+	if got := formatFloat(math.Copysign(0, -1)); got != "-0" {
+		t.Errorf("formatFloat(-0) = %q, want %q", got, "-0")
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
+func TestFormatCompactAbbreviatesOnlyLargeValues(t *testing.T) {
+	cases := []struct {
+		val  float64
+		want string
+	}{
+		{892, "892"},
+		{0.5, "0.5"},
+		{1000, "1k"},
+		{12400, "12.4k"},
+		{124000, "124k"},
+		{1500000, "1.5M"},
+		{2.5e9, "2.5G"},
+		{-12400, "-12.4k"},
+	}
+	for _, tc := range cases {
+		if got := formatCompact(tc.val); got != tc.want {
+			t.Errorf("formatCompact(%v) = %q, want %q", tc.val, got, tc.want)
+		}
+	}
+}
+
+func int32Ptr(v int32) *int32    { return &v }
+func uint32Ptr(v uint32) *uint32 { return &v }

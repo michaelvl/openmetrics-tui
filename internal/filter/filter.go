@@ -1,4 +1,4 @@
-package main
+package filter
 
 import (
 	"errors"
@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"regexp/syntax"
 	"strings"
+
+	"github.com/michaelvl/openmetrics-tui/internal/textutil"
 )
 
 // The label filter is a comma-separated list of clauses, all of which must
@@ -34,14 +36,14 @@ const (
 	opNre
 )
 
-// splitFilterClauses breaks a filter into its clauses.
+// SplitFilterClauses breaks a filter into its clauses.
 //
 // The separator cannot simply be strings.Split: clause values are regexes, and
 // a regex may hold a comma of its own - "env=~prod{1,2}" is one clause, not a
 // torn pair of invalid patterns. So commas inside a {} repetition or a []
 // character class are left alone, and "\," is an escape that yields a literal
 // comma in the clause.
-func splitFilterClauses(filter string) []string {
+func SplitFilterClauses(filter string) []string {
 	if filter == "" {
 		return nil
 	}
@@ -138,10 +140,10 @@ func parseLabelClause(clause string) (key string, op clauseOp, value string) {
 	return "", opNone, clause
 }
 
-// matchesLabelFilter reports whether a series' labels satisfy every clause. An
+// MatchesLabelFilter reports whether a series' labels satisfy every clause. An
 // empty filter has no clauses and so admits everything.
-func matchesLabelFilter(filter string, labels map[string]string) bool {
-	for _, clause := range splitFilterClauses(filter) {
+func MatchesLabelFilter(filter string, labels map[string]string) bool {
+	for _, clause := range SplitFilterClauses(filter) {
 		if !matchesLabelClause(clause, labels) {
 			return false
 		}
@@ -182,16 +184,16 @@ func matchesLabelClause(clause string, labels map[string]string) bool {
 	return true
 }
 
-// getFilteredLabelKeys is the set of label names the filter pins down, which is
+// GetFilteredLabelKeys is the set of label names the filter pins down, which is
 // what LabelModeHideFiltered drops from the display: there is no point spending
 // columns on a value the filter already told you.
 //
 // A negated clause contributes nothing, because it does not pin the value down -
 // "env!=dev" leaves prod and staging both possible, so the column still carries
 // information. Neither does a bare regex, which names no label at all.
-func getFilteredLabelKeys(filterLabel string) []string {
+func GetFilteredLabelKeys(filterLabel string) []string {
 	keys := []string{}
-	for _, clause := range splitFilterClauses(filterLabel) {
+	for _, clause := range SplitFilterClauses(filterLabel) {
 		key, op, _ := parseLabelClause(clause)
 		if key == "" || op == opNone || op == opNe || op == opNre {
 			continue
@@ -201,22 +203,9 @@ func getFilteredLabelKeys(filterLabel string) []string {
 	return keys
 }
 
-// matchesFilters reports whether a series passes the -filter-metric and
-// -filter-label options. Both views share it, so a filter means the same thing
-// whether it is applied to a gauge or to a histogram family.
-func (m model) matchesFilters(name string, labels map[string]string) bool {
-	if m.cfg.FilterMetric != "" {
-		matched, _ := regexp.MatchString(m.cfg.FilterMetric, name)
-		if !matched {
-			return false
-		}
-	}
-	return matchesLabelFilter(m.cfg.FilterLabel, labels)
-}
-
-// validateMetricFilter rejects a pattern that matchesFilters would silently
+// ValidateMetricFilter rejects a pattern that matchesFilters would silently
 // treat as matching nothing.
-func validateMetricFilter(value string) error {
+func ValidateMetricFilter(value string) error {
 	if value == "" {
 		return nil
 	}
@@ -224,10 +213,10 @@ func validateMetricFilter(value string) error {
 	return compileError(err)
 }
 
-// validateLabelFilter rejects a filter that matchesLabelFilter would silently
+// ValidateLabelFilter rejects a filter that MatchesLabelFilter would silently
 // treat as matching nothing, checking every clause rather than only the first.
-func validateLabelFilter(value string) error {
-	clauses := splitFilterClauses(value)
+func ValidateLabelFilter(value string) error {
+	clauses := SplitFilterClauses(value)
 	for _, clause := range clauses {
 		err := validateLabelClause(clause)
 		if err == nil {
@@ -268,7 +257,7 @@ func validateLabelClause(clause string) error {
 func clauseError(clause string, err error) error {
 	key, op, _ := parseLabelClause(clause)
 	if op == opNone || key == "" {
-		key = truncateToWidth(clause, 12)
+		key = textutil.TruncateToWidth(clause, 12)
 	}
 	if key == "" {
 		// An empty clause has nothing to name it by, and the complaint already

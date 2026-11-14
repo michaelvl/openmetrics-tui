@@ -1,4 +1,4 @@
-package main
+package filter
 
 import (
 	"reflect"
@@ -29,8 +29,8 @@ func TestSplitFilterClausesLeavesRegexCommasAlone(t *testing.T) {
 		{"a doubled comma leaves an empty clause", "env=prod,,b=y", []string{"env=prod", "", "b=y"}},
 	}
 	for _, tc := range tests {
-		if got := splitFilterClauses(tc.filter); !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("%s: splitFilterClauses(%q) = %q, want %q", tc.name, tc.filter, got, tc.want)
+		if got := SplitFilterClauses(tc.filter); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: SplitFilterClauses(%q) = %q, want %q", tc.name, tc.filter, got, tc.want)
 		}
 	}
 }
@@ -86,8 +86,8 @@ func TestMatchesLabelFilterAndsItsClauses(t *testing.T) {
 		{"a class survives the split", "region=~[a-z,]+", true},
 	}
 	for _, tc := range tests {
-		if got := matchesLabelFilter(tc.filter, labels); got != tc.want {
-			t.Errorf("%s: matchesLabelFilter(%q) = %v, want %v", tc.name, tc.filter, got, tc.want)
+		if got := MatchesLabelFilter(tc.filter, labels); got != tc.want {
+			t.Errorf("%s: MatchesLabelFilter(%q) = %v, want %v", tc.name, tc.filter, got, tc.want)
 		}
 	}
 }
@@ -112,8 +112,8 @@ func TestAbsentLabelsReadAsEmpty(t *testing.T) {
 		{"absent plus present", "env!=dev,region=eu", true},
 	}
 	for _, tc := range tests {
-		if got := matchesLabelFilter(tc.filter, noEnv); got != tc.want {
-			t.Errorf("%s: matchesLabelFilter(%q) = %v, want %v", tc.name, tc.filter, got, tc.want)
+		if got := MatchesLabelFilter(tc.filter, noEnv); got != tc.want {
+			t.Errorf("%s: MatchesLabelFilter(%q) = %v, want %v", tc.name, tc.filter, got, tc.want)
 		}
 	}
 }
@@ -133,8 +133,8 @@ func TestFilteredLabelKeysAreOnlyTheOnesPinnedDown(t *testing.T) {
 		{"mixed", "prod,env=prod,region!=us,zone=eu", []string{"env", "zone"}},
 	}
 	for _, tc := range tests {
-		if got := getFilteredLabelKeys(tc.filter); !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("%s: getFilteredLabelKeys(%q) = %q, want %q", tc.name, tc.filter, got, tc.want)
+		if got := GetFilteredLabelKeys(tc.filter); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: GetFilteredLabelKeys(%q) = %q, want %q", tc.name, tc.filter, got, tc.want)
 		}
 	}
 }
@@ -142,9 +142,9 @@ func TestFilteredLabelKeysAreOnlyTheOnesPinnedDown(t *testing.T) {
 // With several clauses the footer cannot show the whole filter, so the
 // complaint has to say which clause it is about.
 func TestAClauseErrorNamesItsClause(t *testing.T) {
-	err := validateLabelFilter("env=prod,region=~eu(")
+	err := ValidateLabelFilter("env=prod,region=~eu(")
 	if err == nil {
-		t.Fatal("validateLabelFilter accepted a broken clause")
+		t.Fatal("ValidateLabelFilter accepted a broken clause")
 	}
 	if !strings.HasPrefix(err.Error(), "region: ") {
 		t.Errorf("error = %q, want it to name the region clause", err)
@@ -152,9 +152,9 @@ func TestAClauseErrorNamesItsClause(t *testing.T) {
 
 	// An empty clause has no name to give, and "" + ": " in front of the
 	// complaint is noise.
-	err = validateLabelFilter("env=prod,")
+	err = ValidateLabelFilter("env=prod,")
 	if err == nil {
-		t.Fatal("validateLabelFilter accepted a trailing comma")
+		t.Fatal("ValidateLabelFilter accepted a trailing comma")
 	}
 	if err.Error() != "empty filter clause" {
 		t.Errorf("error = %q, want the bare complaint", err)
@@ -162,9 +162,9 @@ func TestAClauseErrorNamesItsClause(t *testing.T) {
 
 	// A single clause is already visible in the box above the footer, so naming
 	// it would only spend room the complaint itself needs.
-	err = validateLabelFilter("region=~eu(")
+	err = ValidateLabelFilter("region=~eu(")
 	if err == nil {
-		t.Fatal("validateLabelFilter accepted a broken clause")
+		t.Fatal("ValidateLabelFilter accepted a broken clause")
 	}
 	if strings.Contains(err.Error(), "region:") {
 		t.Errorf("error = %q, want the bare complaint for a single clause", err)

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"flag"
@@ -18,13 +18,13 @@ import (
 	"github.com/charmbracelet/lipgloss/table"
 	"github.com/charmbracelet/x/ansi"
 	dto "github.com/prometheus/client_model/go"
-)
 
-// Delta mode constants
-const (
-	DeltaModeOff  = "off"
-	DeltaModeNext = "next"
-	DeltaModeView = "view"
+	"github.com/michaelvl/openmetrics-tui/internal/fetch"
+	"github.com/michaelvl/openmetrics-tui/internal/filter"
+	"github.com/michaelvl/openmetrics-tui/internal/histogram"
+	"github.com/michaelvl/openmetrics-tui/internal/store"
+
+	"github.com/michaelvl/openmetrics-tui/internal/textutil"
 )
 
 // Label mode constants
@@ -49,8 +49,8 @@ type Config struct {
 
 type model struct {
 	cfg                 Config
-	store               *Store
-	fetcher             *Fetcher
+	store               *store.Store
+	fetcher             *fetch.Fetcher
 	err                 error
 	connectionError     error
 	isConnected         bool
@@ -85,7 +85,7 @@ type model struct {
 	// view. expanded and zoomed are keyed by store signature, so the accordion
 	// survives a scrape that reorders nothing but could otherwise invalidate an
 	// index. zoomed is empty when no family has the screen to itself.
-	bucketMode     BucketMode
+	bucketMode     histogram.BucketMode
 	distCursor     int
 	distCursorSpan cursorSpan
 	expanded       map[string]bool
@@ -168,7 +168,9 @@ var (
 	epochDeltaStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("179")) // muted orange
 )
 
-func main() {
+// Run is the omtui entry point: it parses flags, starts the program and exits the
+// process on a fatal error.
+func Run() {
 	cfg := parseFlags()
 
 	if cfg.URL == "" {
@@ -179,11 +181,11 @@ func main() {
 
 	// The same validation the header boxes apply to an edited filter, so that a
 	// flag and a keystroke cannot disagree about what is a usable filter.
-	if err := validateMetricFilter(cfg.FilterMetric); err != nil {
+	if err := filter.ValidateMetricFilter(cfg.FilterMetric); err != nil {
 		fmt.Printf("Error: invalid metric filter: %v\n", err)
 		os.Exit(1)
 	}
-	if err := validateLabelFilter(cfg.FilterLabel); err != nil {
+	if err := filter.ValidateLabelFilter(cfg.FilterLabel); err != nil {
 		fmt.Printf("Error: invalid label filter: %v\n", err)
 		os.Exit(1)
 	}
@@ -192,8 +194,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	store := NewStore(cfg.History)
-	fetcher := NewFetcher(cfg.URL)
+	st := store.NewStore(cfg.History)
+	fetcher := fetch.NewFetcher(cfg.URL)
 
 	metricNameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
 	labelStyle := lipgloss.NewStyle().Faint(true)
@@ -211,7 +213,7 @@ func main() {
 
 	m := model{
 		cfg:               cfg,
-		store:             store,
+		store:             st,
 		fetcher:           fetcher,
 		width:             80,
 		height:            24,
@@ -223,7 +225,7 @@ func main() {
 		// Cumulative counts are the exporter's layout rather than a useful
 		// reading, so open on the decumulated one. Turning those lifetime totals
 		// into a rate is the delta mode's job, one d away.
-		bucketMode: BucketModePerBucket,
+		bucketMode: histogram.BucketModePerBucket,
 		expanded:   make(map[string]bool),
 		input:      input,
 	}
@@ -280,7 +282,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Cycle through label modes. The "hide-filtered" mode is only offered
 			// when the filter pins a label value down - a bare-regex filter names
 			// no label, so the mode would hide nothing.
-			if len(getFilteredLabelKeys(m.cfg.FilterLabel)) == 0 {
+			if len(filter.GetFilteredLabelKeys(m.cfg.FilterLabel)) == 0 {
 				// Simple toggle: labels <-> hide-all. With nothing pinned,
 				// hide-filtered and all render the same row, so the toggle treats
 				// them as one state rather than stepping between two modes that
@@ -308,14 +310,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "d":
 			// Cycle through delta modes: off -> next -> view -> off
 			switch m.cfg.DeltaMode {
-			case DeltaModeOff:
-				m.cfg.DeltaMode = DeltaModeNext
-			case DeltaModeNext:
-				m.cfg.DeltaMode = DeltaModeView
-			case DeltaModeView:
-				m.cfg.DeltaMode = DeltaModeOff
+			case store.DeltaModeOff:
+				m.cfg.DeltaMode = store.DeltaModeNext
+			case store.DeltaModeNext:
+				m.cfg.DeltaMode = store.DeltaModeView
+			case store.DeltaModeView:
+				m.cfg.DeltaMode = store.DeltaModeOff
 			default:
-				m.cfg.DeltaMode = DeltaModeOff
+				m.cfg.DeltaMode = store.DeltaModeOff
 			}
 			m.refresh()
 			return m, nil
@@ -352,7 +354,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Scoped to the distribution view: the bucket mode means nothing in the
 			// metrics view, where b stays the viewport's page-up key.
 			if m.view == ViewDistributions {
-				m.bucketMode = m.bucketMode.next()
+				m.bucketMode = m.bucketMode.Next()
 				m.refresh()
 				return m, nil
 			}
@@ -425,7 +427,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case error:
-		// Store connection error but keep retrying
+		// store.Store connection error but keep retrying
 		m.fetching = false
 		m.connectionError = msg
 		m.isConnected = false
@@ -685,9 +687,9 @@ func (m model) renderFooter(scrollHints string) string {
 	// Build delta status first to measure it
 	deltasStatus := "Off"
 	switch m.cfg.DeltaMode {
-	case DeltaModeNext:
+	case store.DeltaModeNext:
 		deltasStatus = m.deltaValueStyle.Render("Δ") + " Next"
-	case DeltaModeView:
+	case store.DeltaModeView:
 		deltasStatus = m.deltaValueStyle.Render("Δ") + " View"
 	}
 
@@ -766,7 +768,7 @@ func (m model) renderFooter(scrollHints string) string {
 		if m.snapshotErr {
 			style = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 		}
-		leftSegment = style.Render(truncateToWidth(m.snapshotMsg, max(m.width-fixedWidth-safetyMargin-statusReserveWhileEdit, minHintWidth)))
+		leftSegment = style.Render(textutil.TruncateToWidth(m.snapshotMsg, max(m.width-fixedWidth-safetyMargin-statusReserveWhileEdit, minHintWidth)))
 	}
 
 	// Whatever the rest of the line does not want. This used to be floored at a
@@ -912,10 +914,6 @@ Press ? to close
 	)
 }
 
-var baseStyle = lipgloss.NewStyle().
-	BorderStyle(lipgloss.NormalBorder()).
-	BorderForeground(lipgloss.Color("240"))
-
 // tickDelay is the wait until the next tick: the scrape interval while the
 // target answers, reconnectInterval while it does not.
 func (m model) tickDelay() time.Duration {
@@ -999,19 +997,6 @@ func formatAge(d time.Duration) string {
 	return fmt.Sprintf("%ds", sec)
 }
 
-func formatMetricName(series *MetricSeries, hideLabels bool) string {
-	name := series.Name
-	if !hideLabels && len(series.Labels) > 0 {
-		var labelParts []string
-		for k, v := range series.Labels {
-			labelParts = append(labelParts, fmt.Sprintf("%s=%s", k, v))
-		}
-		sort.Strings(labelParts)
-		name += fmt.Sprintf("{%s}", strings.Join(labelParts, ","))
-	}
-	return name
-}
-
 func calculateColumnWidths(headers []string, rows [][]string) []int {
 	if len(rows) == 0 && len(headers) == 0 {
 		return []int{}
@@ -1053,13 +1038,13 @@ func calculateColumnWidths(headers []string, rows [][]string) []int {
 	return widths
 }
 
-func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
+func (m model) buildTableRows(filteredSeries []*store.MetricSeries) [][]string {
 	// The labels the filter pins down are the same for every row, and
 	// hide-filtered is the default mode, so work them out once rather than once
 	// per series.
 	hidden := make(map[string]bool)
 	if m.cfg.LabelMode == LabelModeHideFiltered {
-		for _, key := range getFilteredLabelKeys(m.cfg.FilterLabel) {
+		for _, key := range filter.GetFilteredLabelKeys(m.cfg.FilterLabel) {
 			hidden[key] = true
 		}
 	}
@@ -1111,10 +1096,10 @@ func (m model) buildTableRows(filteredSeries []*MetricSeries) [][]string {
 
 					// Determine if this should be displayed as a delta value
 					switch m.cfg.DeltaMode {
-					case DeltaModeNext:
+					case store.DeltaModeNext:
 						// In 'next' mode, all historical values are deltas, current is absolute
 						isDeltaValue = !isCurrentValue
-					case DeltaModeView:
+					case store.DeltaModeView:
 						// In 'view' mode, all values including current are deltas
 						isDeltaValue = true
 					}
@@ -1169,7 +1154,7 @@ func (m model) distributionHint() string {
 
 func (m model) buildTable() string {
 	// Filter metrics first
-	var filteredSeries []*MetricSeries
+	var filteredSeries []*store.MetricSeries
 	keys := make([]string, 0, len(m.store.Metrics))
 	for k := range m.store.Metrics {
 		keys = append(keys, k)
@@ -1336,7 +1321,7 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.LabelMode, "label-mode", LabelModeHideFiltered, "Label display mode: all, hide-filtered (the default: drop labels the filter pins down), hide-all")
 	flag.StringVar(&cfg.FilterMetric, "filter-metric", "", "Regex to filter metrics by name")
 	flag.StringVar(&cfg.FilterLabel, "filter-label", "", "Label filter: comma-separated clauses that must all match, each key=value, key!=value, key=~regex, key!~regex, or a bare regex tried against every label value (e.g. 'env=prod,region!=eu')")
-	flag.StringVar(&cfg.DeltaMode, "delta-mode", DeltaModeNext, "Delta mode: off, next, view")
+	flag.StringVar(&cfg.DeltaMode, "delta-mode", store.DeltaModeNext, "Delta mode: off, next, view")
 	flag.BoolVar(&cfg.HideStatic, "hide-static", false, "Hide metrics whose recent values never change")
 	flag.StringVar(&cfg.Aggregation, "aggregation", "", "Combine series that differ only in other labels: a comma-separated label list, optionally preceded by sum, avg, min, max or count (e.g. 'pod', 'avg pod,instance', 'count'). Histograms fold with sum only; summaries never fold")
 
@@ -1353,7 +1338,7 @@ func parseFlags() Config {
 
 	// Validate delta mode
 	switch cfg.DeltaMode {
-	case DeltaModeOff, DeltaModeNext, DeltaModeView:
+	case store.DeltaModeOff, store.DeltaModeNext, store.DeltaModeView:
 		// Valid mode
 	default:
 		fmt.Printf("Error: invalid delta mode '%s'. Must be one of: off, next, view\n", cfg.DeltaMode)

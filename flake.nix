@@ -11,20 +11,20 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         openmetrics-tui = pkgs.buildGoModule {
-          pname = "openmetrics-tui";
+          pname = "omtui";
           version = self.shortRev or self.dirtyShortRev or "dev";
           src = ./.;
 
           vendorHash = "sha256-RORd99onHfJbfRaD/q0NclbvTxjOkmKOpH2U12WtWb4=";
 
-          subPackages = [ "." ];
+          subPackages = [ "cmd/omtui" ];
           env.CGO_ENABLED = 0;
           ldflags = [ "-s" "-w" ];
 
           meta = with pkgs.lib; {
             description = "Terminal-based tool to monitor OpenMetrics/Prometheus metrics in real-time";
             homepage = "https://github.com/michaelvl/openmetrics-tui";
-            mainProgram = "openmetrics-tui";
+            mainProgram = "omtui";
             platforms = platforms.unix;
           };
         };

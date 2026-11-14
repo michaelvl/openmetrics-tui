@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"strings"
@@ -10,6 +10,12 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/michaelvl/openmetrics-tui/internal/filter"
+	"github.com/michaelvl/openmetrics-tui/internal/histogram"
+	"github.com/michaelvl/openmetrics-tui/internal/store"
+
+	"github.com/michaelvl/openmetrics-tui/internal/testutil"
 )
 
 // twoGauges gives the label filter something to bite on: one series per env.
@@ -33,9 +39,9 @@ queue_depth{env="dev",region="us"} 1
 // the real one, so a test drives the same Update path the keyboard does.
 func headerModel(t *testing.T, width int, texts ...string) model {
 	t.Helper()
-	store := NewStore(10)
+	st := store.NewStore(10)
 	for _, text := range texts {
-		store.UpdateFromFamilies(parseFamilies(t, text), time.Time{})
+		st.UpdateFromFamilies(testutil.ParseFamilies(t, text), time.Time{})
 	}
 
 	input := textinput.New()
@@ -48,13 +54,13 @@ func headerModel(t *testing.T, width int, texts ...string) model {
 			Interval:  5 * time.Second,
 			History:   10,
 			LabelMode: LabelModeShowAll,
-			DeltaMode: DeltaModeOff,
+			DeltaMode: store.DeltaModeOff,
 		},
-		store:         store,
+		store:         st,
 		width:         width,
 		height:        24,
 		view:          ViewMetrics,
-		bucketMode:    BucketModePerBucket,
+		bucketMode:    histogram.BucketModePerBucket,
 		expanded:      make(map[string]bool),
 		viewport:      viewport.New(width, 20),
 		viewportReady: true,
@@ -224,9 +230,9 @@ func TestLabelFilterValidationFollowsItsClauseForms(t *testing.T) {
 		{"env=~pro{1,2}", false}, // the comma belongs to the repetition
 	}
 	for _, tc := range tests {
-		err := validateLabelFilter(tc.value)
+		err := filter.ValidateLabelFilter(tc.value)
 		if (err != nil) != tc.wantErr {
-			t.Errorf("validateLabelFilter(%q) = %v, wantErr %v", tc.value, err, tc.wantErr)
+			t.Errorf("filter.ValidateLabelFilter(%q) = %v, wantErr %v", tc.value, err, tc.wantErr)
 		}
 	}
 }
@@ -505,7 +511,7 @@ func TestDistributionFooterFitsTheTerminal(t *testing.T) {
 // The useful half of a regexp error is the complaint; the other half repeats the
 // pattern, which is already on screen in the box above.
 func TestRegexErrorsDropTheirBoilerplate(t *testing.T) {
-	err := validateMetricFilter("queue_(")
+	err := filter.ValidateMetricFilter("queue_(")
 	if err == nil {
 		t.Fatal("queue_( compiled")
 	}

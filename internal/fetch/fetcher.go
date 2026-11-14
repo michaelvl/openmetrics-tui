@@ -1,4 +1,4 @@
-package main
+package fetch
 
 import (
 	"errors"
@@ -44,7 +44,7 @@ func (f *Fetcher) Fetch() (map[string]*dto.MetricFamily, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, fmt.Errorf("unexpected status %s", resp.Status)

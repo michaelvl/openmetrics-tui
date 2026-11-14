@@ -1,9 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
-	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -130,9 +131,10 @@ func NewMetricsState() *MetricsState {
 				key := fmt.Sprintf("%s:%s:%s", method, endpoint, code)
 				// More requests for successful codes, more GETs
 				multiplier := 1.0
-				if method == "get" {
+				switch method {
+				case "get":
 					multiplier = 3.0
-				} else if method == "post" {
+				case "post":
 					multiplier = 1.5
 				}
 				if code == "200" || code == "201" {
@@ -416,170 +418,174 @@ func weightedChoice(items []string, weights map[string]float64) string {
 }
 
 func (s *MetricsState) Write(w http.ResponseWriter) {
+	var buf bytes.Buffer
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	timestamp := time.Now().UnixMilli()
 
 	// HTTP requests counter
-	fmt.Fprintln(w, "# HELP http_requests_total The total number of HTTP requests.")
-	fmt.Fprintln(w, "# TYPE http_requests_total counter")
+	fmt.Fprintln(&buf, "# HELP http_requests_total The total number of HTTP requests.")
+	fmt.Fprintln(&buf, "# TYPE http_requests_total counter")
 	for key, value := range s.httpRequests {
 		parts := parseKey(key, 3)
 		if len(parts) == 3 {
-			fmt.Fprintf(w, "http_requests_total{method=\"%s\",endpoint=\"%s\",code=\"%s\"} %.0f %d\n",
+			fmt.Fprintf(&buf, "http_requests_total{method=\"%s\",endpoint=\"%s\",code=\"%s\"} %.0f %d\n",
 				parts[0], parts[1], parts[2], value, timestamp)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// HTTP request bytes counter
-	fmt.Fprintln(w, "# HELP http_request_bytes_total Total bytes received in HTTP requests.")
-	fmt.Fprintln(w, "# TYPE http_request_bytes_total counter")
+	fmt.Fprintln(&buf, "# HELP http_request_bytes_total Total bytes received in HTTP requests.")
+	fmt.Fprintln(&buf, "# TYPE http_request_bytes_total counter")
 	for key, value := range s.httpRequestBytes {
 		parts := parseKey(key, 2)
 		if len(parts) == 2 {
-			fmt.Fprintf(w, "http_request_bytes_total{method=\"%s\",endpoint=\"%s\"} %.0f %d\n",
+			fmt.Fprintf(&buf, "http_request_bytes_total{method=\"%s\",endpoint=\"%s\"} %.0f %d\n",
 				parts[0], parts[1], value, timestamp)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// HTTP response bytes counter
-	fmt.Fprintln(w, "# HELP http_response_bytes_total Total bytes sent in HTTP responses.")
-	fmt.Fprintln(w, "# TYPE http_response_bytes_total counter")
+	fmt.Fprintln(&buf, "# HELP http_response_bytes_total Total bytes sent in HTTP responses.")
+	fmt.Fprintln(&buf, "# TYPE http_response_bytes_total counter")
 	for key, value := range s.httpResponseBytes {
 		parts := parseKey(key, 3)
 		if len(parts) == 3 {
-			fmt.Fprintf(w, "http_response_bytes_total{method=\"%s\",endpoint=\"%s\",code=\"%s\"} %.0f %d\n",
+			fmt.Fprintf(&buf, "http_response_bytes_total{method=\"%s\",endpoint=\"%s\",code=\"%s\"} %.0f %d\n",
 				parts[0], parts[1], parts[2], value, timestamp)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// WebSocket messages counter
-	fmt.Fprintln(w, "# HELP websocket_messages_total Total WebSocket messages.")
-	fmt.Fprintln(w, "# TYPE websocket_messages_total counter")
+	fmt.Fprintln(&buf, "# HELP websocket_messages_total Total WebSocket messages.")
+	fmt.Fprintln(&buf, "# TYPE websocket_messages_total counter")
 	for key, value := range s.websocketMessages {
 		parts := parseKey(key, 2)
 		if len(parts) == 2 {
-			fmt.Fprintf(w, "websocket_messages_total{direction=\"%s\",channel=\"%s\"} %.0f %d\n",
+			fmt.Fprintf(&buf, "websocket_messages_total{direction=\"%s\",channel=\"%s\"} %.0f %d\n",
 				parts[0], parts[1], value, timestamp)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// API errors counter
-	fmt.Fprintln(w, "# HELP api_errors_total Total API errors by type.")
-	fmt.Fprintln(w, "# TYPE api_errors_total counter")
+	fmt.Fprintln(&buf, "# HELP api_errors_total Total API errors by type.")
+	fmt.Fprintln(&buf, "# TYPE api_errors_total counter")
 	for key, value := range s.apiErrors {
 		parts := parseKey(key, 3)
 		if len(parts) == 3 {
-			fmt.Fprintf(w, "api_errors_total{method=\"%s\",endpoint=\"%s\",error_type=\"%s\"} %.0f %d\n",
+			fmt.Fprintf(&buf, "api_errors_total{method=\"%s\",endpoint=\"%s\",error_type=\"%s\"} %.0f %d\n",
 				parts[0], parts[1], parts[2], value, timestamp)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// HTTP active connections gauge
-	fmt.Fprintln(w, "# HELP http_connections_active Currently active HTTP connections.")
-	fmt.Fprintln(w, "# TYPE http_connections_active gauge")
+	fmt.Fprintln(&buf, "# HELP http_connections_active Currently active HTTP connections.")
+	fmt.Fprintln(&buf, "# TYPE http_connections_active gauge")
 	for key, value := range s.httpConnectionsActive {
 		parts := parseKey(key, 2)
 		if len(parts) == 2 {
-			fmt.Fprintf(w, "http_connections_active{method=\"%s\",endpoint=\"%s\"} %.0f %d\n",
+			fmt.Fprintf(&buf, "http_connections_active{method=\"%s\",endpoint=\"%s\"} %.0f %d\n",
 				parts[0], parts[1], value, timestamp)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// HTTP request duration current gauge
-	fmt.Fprintln(w, "# HELP http_request_duration_current Current request duration in seconds.")
-	fmt.Fprintln(w, "# TYPE http_request_duration_current gauge")
+	fmt.Fprintln(&buf, "# HELP http_request_duration_current Current request duration in seconds.")
+	fmt.Fprintln(&buf, "# TYPE http_request_duration_current gauge")
 	for key, value := range s.httpRequestDurationCurrent {
 		parts := parseKey(key, 2)
 		if len(parts) == 2 {
-			fmt.Fprintf(w, "http_request_duration_current{method=\"%s\",endpoint=\"%s\"} %.3f %d\n",
+			fmt.Fprintf(&buf, "http_request_duration_current{method=\"%s\",endpoint=\"%s\"} %.3f %d\n",
 				parts[0], parts[1], value, timestamp)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// WebSocket connections gauge
-	fmt.Fprintln(w, "# HELP websocket_connections_active Currently active WebSocket connections.")
-	fmt.Fprintln(w, "# TYPE websocket_connections_active gauge")
+	fmt.Fprintln(&buf, "# HELP websocket_connections_active Currently active WebSocket connections.")
+	fmt.Fprintln(&buf, "# TYPE websocket_connections_active gauge")
 	for channel, value := range s.websocketConnectionsActive {
-		fmt.Fprintf(w, "websocket_connections_active{channel=\"%s\"} %.0f %d\n",
+		fmt.Fprintf(&buf, "websocket_connections_active{channel=\"%s\"} %.0f %d\n",
 			channel, value, timestamp)
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// API rate limit gauge
-	fmt.Fprintln(w, "# HELP api_rate_limit_remaining Remaining API rate limit capacity.")
-	fmt.Fprintln(w, "# TYPE api_rate_limit_remaining gauge")
+	fmt.Fprintln(&buf, "# HELP api_rate_limit_remaining Remaining API rate limit capacity.")
+	fmt.Fprintln(&buf, "# TYPE api_rate_limit_remaining gauge")
 	for key, value := range s.apiRateLimitRemaining {
 		parts := parseKey(key, 2)
 		if len(parts) == 2 {
-			fmt.Fprintf(w, "api_rate_limit_remaining{endpoint=\"%s\",client_tier=\"%s\"} %.0f %d\n",
+			fmt.Fprintf(&buf, "api_rate_limit_remaining{endpoint=\"%s\",client_tier=\"%s\"} %.0f %d\n",
 				parts[0], parts[1], value, timestamp)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// Server goroutines gauge
-	fmt.Fprintln(w, "# HELP http_server_goroutines Active server goroutines by handler.")
-	fmt.Fprintln(w, "# TYPE http_server_goroutines gauge")
+	fmt.Fprintln(&buf, "# HELP http_server_goroutines Active server goroutines by handler.")
+	fmt.Fprintln(&buf, "# TYPE http_server_goroutines gauge")
 	for handler, value := range s.httpServerGoroutines {
-		fmt.Fprintf(w, "http_server_goroutines{handler=\"%s\"} %.0f %d\n",
+		fmt.Fprintf(&buf, "http_server_goroutines{handler=\"%s\"} %.0f %d\n",
 			handler, value, timestamp)
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// Bandwidth gauge
-	fmt.Fprintln(w, "# HELP bandwidth_usage_mbps Current bandwidth usage in Mbps.")
-	fmt.Fprintln(w, "# TYPE bandwidth_usage_mbps gauge")
+	fmt.Fprintln(&buf, "# HELP bandwidth_usage_mbps Current bandwidth usage in Mbps.")
+	fmt.Fprintln(&buf, "# TYPE bandwidth_usage_mbps gauge")
 	for direction, value := range s.bandwidthUsageMbps {
-		fmt.Fprintf(w, "bandwidth_usage_mbps{direction=\"%s\"} %.2f %d\n",
+		fmt.Fprintf(&buf, "bandwidth_usage_mbps{direction=\"%s\"} %.2f %d\n",
 			direction, value, timestamp)
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// Latency histogram, one label set per handler
-	fmt.Fprintln(w, "# HELP http_request_duration_seconds A histogram of the request duration.")
-	fmt.Fprintln(w, "# TYPE http_request_duration_seconds histogram")
+	fmt.Fprintln(&buf, "# HELP http_request_duration_seconds A histogram of the request duration.")
+	fmt.Fprintln(&buf, "# TYPE http_request_duration_seconds histogram")
 	for _, handler := range latencyHandlers {
-		writeBuckets(w, "http_request_duration_seconds",
+		writeBuckets(&buf, "http_request_duration_seconds",
 			fmt.Sprintf("handler=\"%s\"", handler), latencyBounds, s.histBuckets[handler])
-		fmt.Fprintf(w, "http_request_duration_seconds_sum{handler=\"%s\"} %.2f\n", handler, s.histSum[handler])
-		fmt.Fprintf(w, "http_request_duration_seconds_count{handler=\"%s\"} %.0f\n", handler, s.histCount[handler])
+		fmt.Fprintf(&buf, "http_request_duration_seconds_sum{handler=\"%s\"} %.2f\n", handler, s.histSum[handler])
+		fmt.Fprintf(&buf, "http_request_duration_seconds_count{handler=\"%s\"} %.0f\n", handler, s.histCount[handler])
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf)
 
 	// Response size histogram, over bounds that share nothing with the latency
 	// family above
-	fmt.Fprintln(w, "# HELP http_response_size_bytes A histogram of the response size.")
-	fmt.Fprintln(w, "# TYPE http_response_size_bytes histogram")
-	writeBuckets(w, "http_response_size_bytes", "", sizeBounds, s.sizeBuckets)
-	fmt.Fprintf(w, "http_response_size_bytes_sum %.0f\n", s.sizeSum)
-	fmt.Fprintf(w, "http_response_size_bytes_count %.0f\n", s.sizeCount)
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf, "# HELP http_response_size_bytes A histogram of the response size.")
+	fmt.Fprintln(&buf, "# TYPE http_response_size_bytes histogram")
+	writeBuckets(&buf, "http_response_size_bytes", "", sizeBounds, s.sizeBuckets)
+	fmt.Fprintf(&buf, "http_response_size_bytes_sum %.0f\n", s.sizeSum)
+	fmt.Fprintf(&buf, "http_response_size_bytes_count %.0f\n", s.sizeCount)
+	fmt.Fprintln(&buf)
 
 	// Existing summary
-	fmt.Fprintln(w, "# HELP rpc_duration_seconds A summary of the RPC duration in seconds.")
-	fmt.Fprintln(w, "# TYPE rpc_duration_seconds summary")
-	fmt.Fprintf(w, "rpc_duration_seconds{quantile=\"0.01\"} %.2f\n", s.rpcQuantiles[0.01])
-	fmt.Fprintf(w, "rpc_duration_seconds{quantile=\"0.05\"} %.2f\n", s.rpcQuantiles[0.05])
-	fmt.Fprintf(w, "rpc_duration_seconds{quantile=\"0.5\"} %.2f\n", s.rpcQuantiles[0.5])
-	fmt.Fprintf(w, "rpc_duration_seconds{quantile=\"0.9\"} %.2f\n", s.rpcQuantiles[0.9])
-	fmt.Fprintf(w, "rpc_duration_seconds{quantile=\"0.99\"} %.2f\n", s.rpcQuantiles[0.99])
-	fmt.Fprintf(w, "rpc_duration_seconds_sum %.2f\n", s.rpcSum)
-	fmt.Fprintf(w, "rpc_duration_seconds_count %.0f\n", s.rpcCount)
-	fmt.Fprintln(w)
+	fmt.Fprintln(&buf, "# HELP rpc_duration_seconds A summary of the RPC duration in seconds.")
+	fmt.Fprintln(&buf, "# TYPE rpc_duration_seconds summary")
+	fmt.Fprintf(&buf, "rpc_duration_seconds{quantile=\"0.01\"} %.2f\n", s.rpcQuantiles[0.01])
+	fmt.Fprintf(&buf, "rpc_duration_seconds{quantile=\"0.05\"} %.2f\n", s.rpcQuantiles[0.05])
+	fmt.Fprintf(&buf, "rpc_duration_seconds{quantile=\"0.5\"} %.2f\n", s.rpcQuantiles[0.5])
+	fmt.Fprintf(&buf, "rpc_duration_seconds{quantile=\"0.9\"} %.2f\n", s.rpcQuantiles[0.9])
+	fmt.Fprintf(&buf, "rpc_duration_seconds{quantile=\"0.99\"} %.2f\n", s.rpcQuantiles[0.99])
+	fmt.Fprintf(&buf, "rpc_duration_seconds_sum %.2f\n", s.rpcSum)
+	fmt.Fprintf(&buf, "rpc_duration_seconds_count %.0f\n", s.rpcCount)
+	fmt.Fprintln(&buf)
 
 	// Existing memory gauge
-	fmt.Fprintln(w, "# HELP memory_usage_bytes Current memory usage in bytes.")
-	fmt.Fprintln(w, "# TYPE memory_usage_bytes gauge")
-	fmt.Fprintf(w, "memory_usage_bytes %.0f %d\n", s.memoryUsage, timestamp)
+	fmt.Fprintln(&buf, "# HELP memory_usage_bytes Current memory usage in bytes.")
+	fmt.Fprintln(&buf, "# TYPE memory_usage_bytes gauge")
+	fmt.Fprintf(&buf, "memory_usage_bytes %.0f %d\n", s.memoryUsage, timestamp)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		log.Printf("write metrics: %v", err)
+	}
 }
 
 // latencyHandlers each get a differently shaped latency distribution. A single
@@ -650,7 +656,7 @@ func observe(buckets, bounds []float64, value float64) {
 
 // writeBuckets emits cumulative buckets in the text format, with the +Inf bucket
 // last. labels is the family's own label set, without the le label.
-func writeBuckets(w io.Writer, name, labels string, bounds, buckets []float64) {
+func writeBuckets(w *bytes.Buffer, name, labels string, bounds, buckets []float64) {
 	for i, bound := range bounds {
 		fmt.Fprintf(w, "%s_bucket{%s} %.0f\n", name, joinLabels(labels, fmt.Sprintf("le=%q", formatBound(bound))), buckets[i])
 	}

@@ -1,7 +1,7 @@
-# Reading openmetrics-tui as an agent
+# Reading omtui as an agent
 
 This document is for an AI agent that is handed a screenshot (or pasted text)
-of an `openmetrics-tui` screen and asked to explain or reason about it, without
+of an `omtui` screen and asked to explain or reason about it, without
 access to the running terminal, the command line it was started with, or the
 raw `/metrics` endpoint. Read [README.md](README.md) first for what the
 filter/aggregation/delta/bucket languages mean; this document is about how

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -7,6 +7,11 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/michaelvl/openmetrics-tui/internal/filter"
+	"github.com/michaelvl/openmetrics-tui/internal/store"
+
+	"github.com/michaelvl/openmetrics-tui/internal/histogram"
 )
 
 // ViewMode selects which of the two top-level views is on screen. The accordion's
@@ -22,7 +27,7 @@ const (
 // expansion and zoom state are recorded under.
 type distEntry struct {
 	sig  string
-	dist *DistributionSeries
+	dist *store.DistributionSeries
 }
 
 // columnGap separates the hand-rendered columns. The distribution view draws no
@@ -34,7 +39,7 @@ const columnGap = 2
 const blockIndent = "    "
 
 // distHeaders label the collapsed line. Only the leading column is left-aligned.
-var distHeaders = append([]string{"DISTRIBUTION", "COUNT", "RATE"}, displayQuantileNames...)
+var distHeaders = append([]string{"DISTRIBUTION", "COUNT", "RATE"}, histogram.DisplayQuantileNames...)
 
 var faintStyle = lipgloss.NewStyle().Faint(true)
 
@@ -211,8 +216,8 @@ func (m model) renderZoom(entry distEntry) string {
 
 // zoomStats restates the collapsed line's derived numbers for the zoomed view,
 // where that line is no longer on screen.
-func (m model) zoomStats(dist *DistributionSeries) string {
-	stats := distSummary(dist, distScrapeCount(dist)-1, m.store.Scrapes, m.cfg.Interval)
+func (m model) zoomStats(dist *store.DistributionSeries) string {
+	stats := histogram.DistSummary(dist, histogram.DistScrapeCount(dist)-1, m.store.Scrapes, m.cfg.Interval)
 	var parts []string
 	if stats.CountOK {
 		parts = append(parts, "count "+formatCompact(stats.Count))
@@ -221,7 +226,7 @@ func (m model) zoomStats(dist *DistributionSeries) string {
 		parts = append(parts, "rate "+formatCompact(stats.Rate)+"/s")
 	}
 	for i, cell := range stats.Cells {
-		parts = append(parts, displayQuantileNames[i]+" "+formatQuantile(cell))
+		parts = append(parts, histogram.DisplayQuantileNames[i]+" "+formatQuantile(cell))
 	}
 	return faintStyle.Render(strings.Join(parts, "  "))
 }
@@ -229,7 +234,7 @@ func (m model) zoomStats(dist *DistributionSeries) string {
 // distBlock is one expanded family's grid, computed once so the layout pass and
 // the render pass cannot disagree about any number.
 type distBlock struct {
-	dist   *DistributionSeries
+	dist   *store.DistributionSeries
 	label  string      // heading for the leading column
 	bounds []string    // one per row, in Points order
 	rows   [][]float64 // parallel to bounds; trimmed to the visible columns
@@ -251,13 +256,13 @@ type gridLayout struct {
 // layOutGrid trims them to what fits.
 func (m model) newDistBlock(entry distEntry) *distBlock {
 	block := &distBlock{dist: entry.dist, label: "le"}
-	if entry.dist.Kind == KindSummary {
+	if entry.dist.Kind == store.KindSummary {
 		// A summary's rows are reported quantiles, not bucket bounds.
 		block.label = "quantile"
 	}
-	block.rows = bucketDisplayValues(entry.dist, m.bucketMode, m.cfg.DeltaMode, m.store.Epochs(distScrapeCount(entry.dist)))
+	block.rows = histogram.BucketDisplayValues(entry.dist, m.bucketMode, m.cfg.DeltaMode, m.store.Epochs(histogram.DistScrapeCount(entry.dist)))
 	for _, point := range entry.dist.Points {
-		block.bounds = append(block.bounds, formatBound(point.Bound))
+		block.bounds = append(block.bounds, store.FormatBound(point.Bound))
 	}
 	return block
 }
@@ -370,7 +375,7 @@ func (m model) renderBlock(block *distBlock, indent string, grid gridLayout) []s
 	}
 	lines := []string{renderGridRow(indent, faintStyle.Render(block.label), grid.boundWidth, header, grid.widths)}
 
-	shade := block.dist.Kind == KindHistogram
+	shade := block.dist.Kind == store.KindHistogram
 	for i, bound := range block.bounds {
 		cells := make([]gridCell, len(grid.widths))
 		for j := range cells {
@@ -473,8 +478,8 @@ func (m model) distributionHeader(entries []distEntry) string {
 // applied after widths are known, so a styled cell never throws the layout off.
 func (m model) collapsedCells(entry distEntry) []string {
 	dist := entry.dist
-	total := distScrapeCount(dist)
-	stats := distSummary(dist, total-1, m.store.Scrapes, m.cfg.Interval)
+	total := histogram.DistScrapeCount(dist)
+	stats := histogram.DistSummary(dist, total-1, m.store.Scrapes, m.cfg.Interval)
 
 	count, rate := ".", "."
 	if stats.CountOK {
@@ -514,14 +519,14 @@ func (m model) collapsedName(entry distEntry) string {
 // formatDistLabels renders a family's labels under the current label mode. The
 // family's own labels never include le or quantile, so the whole set belongs to
 // the row.
-func (m model) formatDistLabels(dist *DistributionSeries) string {
+func (m model) formatDistLabels(dist *store.DistributionSeries) string {
 	if m.cfg.LabelMode == LabelModeHideAll || len(dist.Labels) == 0 {
 		return ""
 	}
 
 	hidden := make(map[string]bool)
 	if m.cfg.LabelMode == LabelModeHideFiltered {
-		for _, key := range getFilteredLabelKeys(m.cfg.FilterLabel) {
+		for _, key := range filter.GetFilteredLabelKeys(m.cfg.FilterLabel) {
 			hidden[key] = true
 		}
 	}
@@ -543,7 +548,7 @@ func (m model) formatDistLabels(dist *DistributionSeries) string {
 // formatQuantile renders one quantile cell. A rank landing in the +Inf bucket has
 // no upper bound to interpolate towards, so it reads as "greater than the last
 // finite bound" rather than as a number the bucket layout cannot support.
-func formatQuantile(cell quantileCell) string {
+func formatQuantile(cell histogram.QuantileCell) string {
 	if !cell.OK {
 		return "."
 	}

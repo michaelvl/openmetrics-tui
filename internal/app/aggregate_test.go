@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"math"
@@ -6,6 +6,11 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/michaelvl/openmetrics-tui/internal/histogram"
+	"github.com/michaelvl/openmetrics-tui/internal/store"
+
+	"github.com/michaelvl/openmetrics-tui/internal/testutil"
 )
 
 func TestParseAggregationDefaultsToSum(t *testing.T) {
@@ -102,12 +107,12 @@ func TestValidateAggregation(t *testing.T) {
 }
 
 // series is a terse constructor for the aggregation tests.
-func series(name string, labels map[string]string, values ...float64) *MetricSeries {
-	return &MetricSeries{Name: name, Kind: KindGauge, Labels: labels, Values: values}
+func series(name string, labels map[string]string, values ...float64) *store.MetricSeries {
+	return &store.MetricSeries{Name: name, Kind: store.KindGauge, Labels: labels, Values: values}
 }
 
 func TestAggregateGroupsByTheNamedLabels(t *testing.T) {
-	in := []*MetricSeries{
+	in := []*store.MetricSeries{
 		series("queue_depth", map[string]string{"env": "prod", "pod": "a"}, 1),
 		series("queue_depth", map[string]string{"env": "prod", "pod": "b"}, 2),
 		series("queue_depth", map[string]string{"env": "dev", "pod": "a"}, 4),
@@ -133,7 +138,7 @@ func TestAggregateGroupsByTheNamedLabels(t *testing.T) {
 }
 
 func TestAggregateWithNoLabelsTotalsTheMetric(t *testing.T) {
-	in := []*MetricSeries{
+	in := []*store.MetricSeries{
 		series("queue_depth", map[string]string{"pod": "a"}, 1),
 		series("queue_depth", map[string]string{"pod": "b"}, 2),
 	}
@@ -153,7 +158,7 @@ func TestAggregateWithNoLabelsTotalsTheMetric(t *testing.T) {
 // PromQL's sum by (pod) drops the metric name and would add these two together.
 // Inside one exporter that is never what was meant.
 func TestAggregateNeverMergesMetricNames(t *testing.T) {
-	in := []*MetricSeries{
+	in := []*store.MetricSeries{
 		series("queue_depth", map[string]string{"pod": "a"}, 1),
 		series("worker_count", map[string]string{"pod": "a"}, 2),
 	}
@@ -168,7 +173,7 @@ func TestAggregateNeverMergesMetricNames(t *testing.T) {
 // still this scrape, so the fold has to line the slices up at their newest end.
 // Aligning from the oldest would report b's 30 as if it were three scrapes ago.
 func TestAggregateAlignsHistoryFromTheNewestEnd(t *testing.T) {
-	in := []*MetricSeries{
+	in := []*store.MetricSeries{
 		series("queue_depth", map[string]string{"pod": "a"}, 1, 2, 3, 4),
 		series("queue_depth", map[string]string{"pod": "b"}, 30, 40),
 	}
@@ -182,7 +187,7 @@ func TestAggregateAlignsHistoryFromTheNewestEnd(t *testing.T) {
 
 func TestAggregateSkipsMembersThatDidNotReport(t *testing.T) {
 	nan := math.NaN()
-	in := []*MetricSeries{
+	in := []*store.MetricSeries{
 		series("queue_depth", map[string]string{"pod": "a"}, 1, nan, nan),
 		series("queue_depth", map[string]string{"pod": "b"}, 10, 20, nan),
 	}
@@ -202,8 +207,8 @@ func TestAggregateSkipsMembersThatDidNotReport(t *testing.T) {
 
 func TestAggregateOperators(t *testing.T) {
 	nan := math.NaN()
-	group := func() []*MetricSeries {
-		return []*MetricSeries{
+	group := func() []*store.MetricSeries {
+		return []*store.MetricSeries{
 			series("queue_depth", map[string]string{"pod": "a"}, 2, nan),
 			series("queue_depth", map[string]string{"pod": "b"}, 4, nan),
 			series("queue_depth", map[string]string{"pod": "c"}, 12, 5),
@@ -250,7 +255,7 @@ func TestAggregateOperators(t *testing.T) {
 // Aggregation is a no-op when the field is empty, and must hand back the very
 // series it was given rather than copies - the store owns them.
 func TestAggregateIsANoOpWhenOff(t *testing.T) {
-	in := []*MetricSeries{series("queue_depth", map[string]string{"pod": "a"}, 1)}
+	in := []*store.MetricSeries{series("queue_depth", map[string]string{"pod": "a"}, 1)}
 	got := parseAggregation("").aggregate(in)
 	if len(got) != 1 || got[0] != in[0] {
 		t.Errorf("aggregate with no spec did not pass the input through")
@@ -291,7 +296,7 @@ queue_depth{pod="b"} 2
 // A series lacking a grouping label must not be folded in with the ones that
 // have it, or "sum by pod" would quietly add an unlabelled total to a per-pod one.
 func TestAggregateSeparatesSeriesLackingTheLabel(t *testing.T) {
-	in := []*MetricSeries{
+	in := []*store.MetricSeries{
 		series("queue_depth", map[string]string{"pod": "a"}, 1),
 		series("queue_depth", map[string]string{}, 100),
 	}
@@ -331,11 +336,11 @@ func aggregatedDists(t *testing.T, field string, texts ...string) []distEntry {
 
 // bucketValues reads a family's newest scrape, bound by bound, for comparison
 // against what the members reported.
-func bucketValues(dist *DistributionSeries) map[string]float64 {
-	total := distScrapeCount(dist)
+func bucketValues(dist *store.DistributionSeries) map[string]float64 {
+	total := histogram.DistScrapeCount(dist)
 	got := make(map[string]float64, len(dist.Points))
 	for _, point := range dist.Points {
-		got[formatBound(point.Bound)] = valueAt(point.Series, total-1, total)
+		got[store.FormatBound(point.Bound)] = histogram.ValueAt(point.Series, total-1, total)
 	}
 	return got
 }
@@ -360,11 +365,11 @@ func TestDistributionsSumBucketByBucket(t *testing.T) {
 		t.Errorf("buckets = %v, want %v", buckets, want)
 	}
 
-	total := distScrapeCount(dist)
-	if count := valueAt(dist.Count, total-1, total); count != 14 {
+	total := histogram.DistScrapeCount(dist)
+	if count := histogram.ValueAt(dist.Count, total-1, total); count != 14 {
 		t.Errorf("count = %v, want 14", count)
 	}
-	if sum := valueAt(dist.Sum, total-1, total); sum != 10 {
+	if sum := histogram.ValueAt(dist.Sum, total-1, total); sum != 10 {
 		t.Errorf("sum = %v, want 10", sum)
 	}
 }
@@ -421,7 +426,7 @@ func TestOnlySumFoldsDistributions(t *testing.T) {
 // arithmetic on two p99s gives the p99 of the combined stream. The histograms
 // around it still fold.
 func TestSummariesAreNotSummed(t *testing.T) {
-	m := distModel(t, 120, perPodLatency+summaryFixture)
+	m := distModel(t, 120, perPodLatency+testutil.SummaryFixture)
 	m.cfg.Aggregation = "sum"
 	got := m.visibleDistributions()
 	if len(got) != 2 {
@@ -463,7 +468,7 @@ lat_seconds_count{pod="b"} 10
 	// and +Inf over both. The order is ascending with +Inf last.
 	var bounds []string
 	for _, point := range got[0].dist.Points {
-		bounds = append(bounds, formatBound(point.Bound))
+		bounds = append(bounds, store.FormatBound(point.Bound))
 	}
 	if !reflect.DeepEqual(bounds, []string{"1", "2", "+Inf"}) {
 		t.Errorf("bounds = %v, want 1, 2, +Inf", bounds)
@@ -487,24 +492,24 @@ lat_seconds_count{pod="a"} 4
 		t.Fatalf("got %d families, want one: %v", len(got), got)
 	}
 	dist := got[0].dist
-	total := distScrapeCount(dist)
+	total := histogram.DistScrapeCount(dist)
 	if total != 2 {
 		t.Fatalf("folded family spans %d scrapes, want 2", total)
 	}
 	// The older column holds pod a alone; the newer holds both.
-	inf := dist.findPoint(math.Inf(+1))
+	inf := dist.FindPoint(math.Inf(+1))
 	if inf == nil {
 		t.Fatalf("folded family has no +Inf bucket: %v", dist.Points)
 	}
-	if got := valueAt(inf, 0, total); got != 4 {
+	if got := histogram.ValueAt(inf, 0, total); got != 4 {
 		t.Errorf("older +Inf = %v, want pod a alone", got)
 	}
-	if got := valueAt(inf, 1, total); got != 14 {
+	if got := histogram.ValueAt(inf, 1, total); got != 14 {
 		t.Errorf("newest +Inf = %v, want 14", got)
 	}
 	// pod b's le=1 bucket was not reported at the older scrape, which reads as a
 	// gap rather than as a count of zero.
-	if got := valueAt(dist.Points[0].Series, 0, total); !math.IsNaN(got) {
+	if got := histogram.ValueAt(dist.Points[0].Series, 0, total); !math.IsNaN(got) {
 		t.Errorf("older le=1 = %v, want a gap: no member reported that bound yet", got)
 	}
 }
@@ -544,7 +549,7 @@ lat_seconds_count{pod="b"} 11
 func TestFoldedFamilyExpandsAsOneRow(t *testing.T) {
 	m := distModel(t, 120, perPodLatency)
 	m.cfg.Aggregation = "sum"
-	m.bucketMode = BucketModeCumulative
+	m.bucketMode = histogram.BucketModeCumulative
 	m.refresh()
 
 	m.expandStep()

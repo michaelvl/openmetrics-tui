@@ -1,8 +1,10 @@
-package main
+package histogram
 
 import (
 	"math"
 	"time"
+
+	"github.com/michaelvl/openmetrics-tui/internal/store"
 )
 
 // BucketMode selects how a histogram's bucket counts are presented across the
@@ -36,7 +38,7 @@ func (b BucketMode) String() string {
 }
 
 // next toggles cumulative <-> per-bucket.
-func (b BucketMode) next() BucketMode {
+func (b BucketMode) Next() BucketMode {
 	if b == BucketModeCumulative {
 		return BucketModePerBucket
 	}
@@ -44,34 +46,20 @@ func (b BucketMode) next() BucketMode {
 }
 
 // displayQuantiles are the quantiles shown on a collapsed distribution line, and
-// displayQuantileNames their column headings. The two are parallel and are the
+// DisplayQuantileNames their column headings. The two are parallel and are the
 // single source of both, so adding a quantile cannot silently mislabel a column.
 var (
 	displayQuantiles     = []float64{0.5, 0.9, 0.99}
-	displayQuantileNames = []string{"p50", "p90", "p99"}
+	DisplayQuantileNames = []string{"p50", "p90", "p99"}
 )
 
-// IsStatic reports whether nothing in the family moves, so the hide-static
-// toggle drops a distribution only when every bucket, the sum and the count are
-// all unchanging.
-func (d *DistributionSeries) IsStatic() bool {
-	static, seen := true, false
-	d.eachSeries("", func(_ string, series *MetricSeries) {
-		seen = true
-		if !series.IsStatic() {
-			static = false
-		}
-	})
-	return seen && static
-}
-
-// distScrapeCount is the number of retained scrapes the family spans, which is
+// DistScrapeCount is the number of retained scrapes the family spans, which is
 // the longest history any of its series has. Series are right-aligned: a bucket
 // the exporter only started reporting mid-run has a shorter history, and reads
 // as missing for the scrapes before it existed.
-func distScrapeCount(dist *DistributionSeries) int {
+func DistScrapeCount(dist *store.DistributionSeries) int {
 	total := 0
-	dist.eachSeries("", func(_ string, series *MetricSeries) {
+	dist.EachSeries("", func(_ string, series *store.MetricSeries) {
 		if len(series.Values) > total {
 			total = len(series.Values)
 		}
@@ -79,11 +67,11 @@ func distScrapeCount(dist *DistributionSeries) int {
 	return total
 }
 
-// valueAt reads one series at scrape index idx, where index 0 is the oldest of
+// ValueAt reads one series at scrape index idx, where index 0 is the oldest of
 // total retained scrapes. A series shorter than total is padded on the left with
 // NaN rather than shifted, so a column always means the same scrape across the
 // whole family.
-func valueAt(series *MetricSeries, idx, total int) float64 {
+func ValueAt(series *store.MetricSeries, idx, total int) float64 {
 	if series == nil || idx < 0 || idx >= total {
 		return math.NaN()
 	}
@@ -95,7 +83,7 @@ func valueAt(series *MetricSeries, idx, total int) float64 {
 	return series.Values[pos]
 }
 
-// bucketDisplayValues returns one value row per bucket or quantile, in Points
+// BucketDisplayValues returns one value row per bucket or quantile, in Points
 // order, every row padded to the family's full scrape count.
 //
 // The display's two axes compose here, in a fixed order and without consulting
@@ -104,36 +92,36 @@ func valueAt(series *MetricSeries, idx, total int) float64 {
 // than cumulative counts, so decumulating them would be meaningless and the
 // bucket mode passes them through untouched; the delta mode still applies.
 //
-// epochs is the store's scrape epochs (Store.Epochs), which keep the delta mode
+// epochs is the store's scrape epochs (store.Store.Epochs), which keep the delta mode
 // from differencing across a connection break.
-func bucketDisplayValues(dist *DistributionSeries, mode BucketMode, deltaMode string, epochs []int) [][]float64 {
-	total := distScrapeCount(dist)
+func BucketDisplayValues(dist *store.DistributionSeries, mode BucketMode, deltaMode string, epochs []int) [][]float64 {
+	total := DistScrapeCount(dist)
 	rows := make([][]float64, len(dist.Points))
 	for i, point := range dist.Points {
 		row := make([]float64, total)
 		for idx := range row {
-			row[idx] = valueAt(point.Series, idx, total)
+			row[idx] = ValueAt(point.Series, idx, total)
 		}
 		rows[i] = row
 	}
 
-	if dist.Kind == KindHistogram && mode == BucketModePerBucket {
+	if dist.Kind == store.KindHistogram && mode == BucketModePerBucket {
 		for idx := 0; idx < total; idx++ {
 			decumulateScrape(rows, idx)
 		}
 	}
 
-	if deltaMode != DeltaModeOff {
+	if deltaMode != store.DeltaModeOff {
 		// Borrow the simple-metric time transform rather than reimplementing its
 		// modes and their NaN handling. The kind travels with the row so that a
 		// bucket's counter reset is blanked and a summary's falling quantile is
 		// not.
 		for i, point := range dist.Points {
-			kind := KindCounter
+			kind := store.KindCounter
 			if point.Series != nil {
 				kind = point.Series.Kind
 			}
-			rows[i] = (&MetricSeries{Kind: kind, Values: rows[i]}).ValuesWithDeltas(deltaMode, epochs)
+			rows[i] = (&store.MetricSeries{Kind: kind, Values: rows[i]}).ValuesWithDeltas(deltaMode, epochs)
 		}
 	}
 	return rows
@@ -163,8 +151,8 @@ func decumulateScrape(rows [][]float64, idx int) {
 	}
 }
 
-// quantileCell is one estimated or reported quantile.
-type quantileCell struct {
+// QuantileCell is one estimated or reported quantile.
+type QuantileCell struct {
 	// Value is the quantile's value, or the last finite bucket bound when Beyond.
 	Value float64
 	// Beyond is set when the rank fell in the +Inf bucket, where there is no
@@ -183,30 +171,30 @@ type quantileCell struct {
 // rank q*total and interpolate linearly between its bound and the one below.
 // Precision is therefore bounded by the bucket layout - a p99 of 0.87 derived
 // from bounds [0.5, 1] really only means "somewhere in 0.5 to 1.0".
-func estimateQuantile(dist *DistributionSeries, scrapeIdx int, q float64) quantileCell {
-	total := distScrapeCount(dist)
+func estimateQuantile(dist *store.DistributionSeries, scrapeIdx int, q float64) QuantileCell {
+	total := DistScrapeCount(dist)
 	if len(dist.Points) == 0 || scrapeIdx < 0 || scrapeIdx >= total {
-		return quantileCell{}
+		return QuantileCell{}
 	}
 
-	if dist.Kind == KindSummary {
+	if dist.Kind == store.KindSummary {
 		for _, point := range dist.Points {
 			if point.Bound != q {
 				continue
 			}
-			val := valueAt(point.Series, scrapeIdx, total)
+			val := ValueAt(point.Series, scrapeIdx, total)
 			if math.IsNaN(val) {
-				return quantileCell{}
+				return QuantileCell{}
 			}
-			return quantileCell{Value: val, OK: true}
+			return QuantileCell{Value: val, OK: true}
 		}
 		// The exporter does not publish this quantile; it cannot be derived.
-		return quantileCell{}
+		return QuantileCell{}
 	}
 
 	observations, ok := bucketTotal(dist, scrapeIdx)
 	if !ok || observations <= 0 {
-		return quantileCell{}
+		return QuantileCell{}
 	}
 	rank := q * observations
 
@@ -214,7 +202,7 @@ func estimateQuantile(dist *DistributionSeries, scrapeIdx int, q float64) quanti
 	running := 0.0
 	lastFinite := 0.0
 	for _, point := range dist.Points {
-		count := valueAt(point.Series, scrapeIdx, total)
+		count := ValueAt(point.Series, scrapeIdx, total)
 		if math.IsNaN(count) {
 			continue
 		}
@@ -227,15 +215,15 @@ func estimateQuantile(dist *DistributionSeries, scrapeIdx int, q float64) quanti
 
 		if count >= rank {
 			if math.IsInf(point.Bound, +1) {
-				return quantileCell{Value: lastFinite, Beyond: true, OK: true}
+				return QuantileCell{Value: lastFinite, Beyond: true, OK: true}
 			}
 			if count == prevCount {
 				// An empty band cannot be interpolated across; the bound itself is
 				// the best answer.
-				return quantileCell{Value: point.Bound, OK: true}
+				return QuantileCell{Value: point.Bound, OK: true}
 			}
 			fraction := (rank - prevCount) / (count - prevCount)
-			return quantileCell{Value: prevBound + fraction*(point.Bound-prevBound), OK: true}
+			return QuantileCell{Value: prevBound + fraction*(point.Bound-prevBound), OK: true}
 		}
 
 		prevCount = count
@@ -247,18 +235,18 @@ func estimateQuantile(dist *DistributionSeries, scrapeIdx int, q float64) quanti
 
 	// No bucket reached the rank, which means the count series disagrees with the
 	// buckets. Report the last bound we saw as a lower bound.
-	return quantileCell{Value: lastFinite, Beyond: true, OK: true}
+	return QuantileCell{Value: lastFinite, Beyond: true, OK: true}
 }
 
 // bucketTotal is the observation count the buckets themselves imply at
 // scrapeIdx: the largest cumulative count, normally the +Inf bucket. Quantile
 // ranks are compared against bucket counts, so they must be derived from the
 // same source rather than from a _count series that may disagree.
-func bucketTotal(dist *DistributionSeries, scrapeIdx int) (float64, bool) {
-	total := distScrapeCount(dist)
+func bucketTotal(dist *store.DistributionSeries, scrapeIdx int) (float64, bool) {
+	total := DistScrapeCount(dist)
 	best, ok := 0.0, false
 	for _, point := range dist.Points {
-		val := valueAt(point.Series, scrapeIdx, total)
+		val := ValueAt(point.Series, scrapeIdx, total)
 		if math.IsNaN(val) {
 			continue
 		}
@@ -272,13 +260,13 @@ func bucketTotal(dist *DistributionSeries, scrapeIdx int) (float64, bool) {
 // distCount is the observation count to display: the exporter's _count series
 // when it reports one, falling back to the buckets. Native histograms carry no
 // buckets at all, so the _count path is the only one that works for them.
-func distCount(dist *DistributionSeries, scrapeIdx int) (float64, bool) {
+func distCount(dist *store.DistributionSeries, scrapeIdx int) (float64, bool) {
 	if dist.Count != nil {
-		if val := valueAt(dist.Count, scrapeIdx, distScrapeCount(dist)); !math.IsNaN(val) {
+		if val := ValueAt(dist.Count, scrapeIdx, DistScrapeCount(dist)); !math.IsNaN(val) {
 			return val, true
 		}
 	}
-	if dist.Kind == KindSummary {
+	if dist.Kind == store.KindSummary {
 		// A summary's points are latencies, not counts; there is nothing to fall
 		// back to.
 		return 0, false
@@ -295,16 +283,16 @@ type distStats struct {
 	Rate   float64
 	RateOK bool
 	// Cells holds one entry per displayQuantiles entry, in that order.
-	Cells []quantileCell
+	Cells []QuantileCell
 }
 
-// distSummary derives the collapsed line for a distribution at scrape index
+// DistSummary derives the collapsed line for a distribution at scrape index
 // scrapeIdx. scrapes is the store's scrape log, right-aligned to the family's
 // history; the rate is taken over the real time between the two scrapes it
 // compares, and never across a connection break. interval stands in for the
 // elapsed time when the log does not reach back far enough.
-func distSummary(dist *DistributionSeries, scrapeIdx int, scrapes []ScrapeInfo, interval time.Duration) distStats {
-	stats := distStats{Cells: make([]quantileCell, 0, len(displayQuantiles))}
+func DistSummary(dist *store.DistributionSeries, scrapeIdx int, scrapes []store.ScrapeInfo, interval time.Duration) distStats {
+	stats := distStats{Cells: make([]QuantileCell, 0, len(displayQuantiles))}
 	for _, q := range displayQuantiles {
 		stats.Cells = append(stats.Cells, estimateQuantile(dist, scrapeIdx, q))
 	}
@@ -315,7 +303,7 @@ func distSummary(dist *DistributionSeries, scrapeIdx int, scrapes []ScrapeInfo, 
 	}
 	stats.Count, stats.CountOK = count, true
 
-	total := distScrapeCount(dist)
+	total := DistScrapeCount(dist)
 	current, haveCurrent := scrapeFor(scrapes, total, scrapeIdx)
 
 	// Walk back to the most recent scrape that reported a count; holes in the
@@ -346,10 +334,10 @@ func distSummary(dist *DistributionSeries, scrapeIdx int, scrapes []ScrapeInfo, 
 
 // scrapeFor maps scrape index idx of a total-long history onto the store's
 // scrape log, which the history is right-aligned against.
-func scrapeFor(scrapes []ScrapeInfo, total, idx int) (ScrapeInfo, bool) {
+func scrapeFor(scrapes []store.ScrapeInfo, total, idx int) (store.ScrapeInfo, bool) {
 	pos := len(scrapes) - total + idx
 	if pos < 0 || pos >= len(scrapes) {
-		return ScrapeInfo{}, false
+		return store.ScrapeInfo{}, false
 	}
 	return scrapes[pos], true
 }

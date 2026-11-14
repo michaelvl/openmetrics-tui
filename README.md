@@ -1,4 +1,4 @@
-# openmetrics-tui
+# omtui (openmetrics-tui)
 
 A terminal-based tool to monitor OpenMetrics/Prometheus metrics in real-time. A
 simple alternative to `watch 'curl http://... | grep metric_*`' workflows.
@@ -43,8 +43,11 @@ On NixOS, add the flake as an input and include
 With Go:
 
 ```sh
-go install github.com/michaelvl/openmetrics-tui@latest
+go install github.com/michaelvl/openmetrics-tui/cmd/omtui@latest
 ```
+
+The binary is called `omtui`. It was previously called `openmetrics-tui`, so
+the old binary name and the old `go install` path no longer work.
 
 ## Filtering and aggregation
 

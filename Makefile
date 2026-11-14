@@ -1,4 +1,4 @@
-BINARY_NAME=openmetrics-tui
+BINARY_NAME=omtui
 MOCK_BINARY_NAME=mock-server
 
 .PHONY: all build test lint fmt clean run mock-server screenshot
@@ -6,7 +6,7 @@ MOCK_BINARY_NAME=mock-server
 all: build mock-server
 
 build:
-	CGO_ENABLED=0 go build -o $(BINARY_NAME) .
+	CGO_ENABLED=0 go build -o $(BINARY_NAME) ./cmd/omtui
 
 mock-server:
 	CGO_ENABLED=0 go build -o $(MOCK_BINARY_NAME) cmd/mock-server/main.go

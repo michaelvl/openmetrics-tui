@@ -1,0 +1,77 @@
+# controllers.yaml
+title: Controller health
+datasource:
+  url: http://localhost:8080 # the mock server (make mock-server); overridden by --prom, ignored by --managed
+refresh: 10s
+windows: [now, 5m, 15m, 1h] # columns, single list, now first; one query_range per panel feeds all of them
+spark: 1h # sparkline range
+
+variables: # shown as $namespace and $controller; keys 1 and 2 by declaration order
+  namespace:
+    default: prod # override with --var namespace=staging
+    # suggestions are derived from namespace="${namespace}" in the panel queries;
+    # override with options: [prod, staging] or
+    # options: { label_values: { metric: kube_pod_info, label: namespace } }
+    pattern: '^[a-z0-9-]+$' # checked before substitution
+  controller:
+    default: ".*" # "all" is a regex, so panels use controller=~"${controller}"
+    regex: true # allows regex metacharacters in the value
+
+# Used only with --managed; configures the generated scrape config.
+scrape:
+  namespaces: [prod]
+  interval: 15s
+  annotation: prometheus.io/scrape # opt-in; omit to scrape every Running pod with a port
+  port: prometheus.io/port # annotation holding the metrics port
+  path: prometheus.io/path # annotation holding the path (default /metrics)
+
+panels:
+  - title: Reconciles per resource per minute
+    query: |
+      sum by (controller) (rate(controller_runtime_reconcile_total{namespace="${namespace}", controller=~"${controller}"}[5m])) * 60
+      /
+      on (controller) group_left
+      count by (controller) (kube_customresource_info{namespace="${namespace}", controller=~"${controller}"})
+    # kube_customresource_info is user-defined via kube-state-metrics
+    # custom-resource-state config; the mock server (cmd/mock-server) serves it.
+    unit: "/min"
+    label: "{{controller}}" # row title; one row per series
+    thresholds: # per cell, first match wins
+      - { gt: 5, color: red }
+      - { gt: 1, color: yellow }
+      - { lte: 1, color: green }
+
+  - title: Reconcile error ratio
+    query: |
+      sum by (controller) (rate(controller_runtime_reconcile_errors_total{namespace="${namespace}", controller=~"${controller}"}[5m]))
+      / sum by (controller) (rate(controller_runtime_reconcile_total{namespace="${namespace}", controller=~"${controller}"}[5m]))
+    unit: percent # value x100, "%" suffix
+    label: "{{controller}}"
+    thresholds:
+      - { gt: 0.05, color: red }
+      - { gt: 0.01, color: yellow }
+      - { color: green }
+
+  - title: Workqueue depth
+    query: max by (name) (workqueue_depth{namespace="${namespace}"})
+    label: "{{name}}"
+    thresholds:
+      - { gt: 100, color: red }
+      - { color: green }
+
+  - title: Pod restarts (1h)
+    query: sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace="${namespace}"}[1h]))
+    label: "{{pod}}"
+    sort: desc # by the "now" column
+    limit: 8 # top-N rows
+    thresholds:
+      - { gt: 0, color: red }
+      - { color: green }
+
+  - title: API server p99 latency
+    query: histogram_quantile(0.99, sum by (le) (rate(apiserver_request_duration_seconds_bucket[5m])))
+    unit: s
+    thresholds:
+      - { gt: 1, color: red }
+      - { gt: 0.3, color: yellow }
+      - { color: green }

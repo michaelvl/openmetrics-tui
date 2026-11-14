@@ -95,7 +95,10 @@ type Backend struct {
 	exitErr map[string]error
 }
 
-var _ promapi.Querier = (*Backend)(nil)
+var (
+	_ promapi.Querier     = (*Backend)(nil)
+	_ promapi.LabelValuer = (*Backend)(nil)
+)
 
 // Start runs preflight, kubectl proxy and VictoriaMetrics. On failure it
 // returns a *StartError (or a configuration error) with nothing left running.
@@ -374,6 +377,11 @@ func (b *Backend) QueryRange(ctx context.Context, expr string, start, end time.T
 // Instant implements promapi.Querier.
 func (b *Backend) Instant(ctx context.Context, expr string, at time.Time) ([]promapi.Series, error) {
 	return b.current().Instant(ctx, expr, at)
+}
+
+// LabelValues implements promapi.LabelValuer against the current VM client.
+func (b *Backend) LabelValues(ctx context.Context, label, match string) ([]string, error) {
+	return b.current().LabelValues(ctx, label, match)
 }
 
 func (b *Backend) current() *promapi.Client {

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,15 @@ type Querier interface {
 	Instant(ctx context.Context, expr string, at time.Time) ([]Series, error)
 }
 
+// LabelValuer lists label values. Prometheus and VictoriaMetrics both serve
+// it; the dashboard uses it for variable suggestions and treats a Querier
+// that does not implement it as having no suggestions.
+type LabelValuer interface {
+	// LabelValues returns the sorted values of label. When match is not
+	// empty it is a series selector that restricts the series considered.
+	LabelValues(ctx context.Context, label, match string) ([]string, error)
+}
+
 // Options configures a Client. Secrets are given as file paths, never values,
 // so they stay off the command line.
 type Options struct {
@@ -66,7 +76,10 @@ type Client struct {
 	password string
 }
 
-var _ Querier = (*Client)(nil)
+var (
+	_ Querier     = (*Client)(nil)
+	_ LabelValuer = (*Client)(nil)
+)
 
 // New builds a Client, reading any secret files once up front so a bad path
 // fails at startup rather than on the first query.
@@ -145,18 +158,63 @@ type response struct {
 	Status    string `json:"status"`
 	ErrorType string `json:"errorType"`
 	Error     string `json:"error"`
-	Data      struct {
-		ResultType string          `json:"resultType"`
-		Result     json.RawMessage `json:"result"`
-	} `json:"data"`
+	// Data is an object for queries and a list of strings for label values.
+	Data json.RawMessage `json:"data"`
 }
 
 func (c *Client) do(ctx context.Context, path string, form url.Values) ([]Series, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, strings.NewReader(form.Encode()))
+	raw, err := c.send(ctx, http.MethodPost, path, form)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	var data struct {
+		ResultType string          `json:"resultType"`
+		Result     json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(raw.Data, &data); err != nil {
+		return nil, fmt.Errorf("malformed response: %w", err)
+	}
+	return parseResult(data.ResultType, data.Result)
+}
+
+// LabelValues implements LabelValuer with GET /api/v1/label/<label>/values.
+func (c *Client) LabelValues(ctx context.Context, label, match string) ([]string, error) {
+	form := url.Values{}
+	if match != "" {
+		form.Set("match[]", match)
+	}
+	raw, err := c.send(ctx, http.MethodGet, "/api/v1/label/"+url.PathEscape(label)+"/values", form)
+	if err != nil {
+		return nil, err
+	}
+	var vals []string
+	if err := json.Unmarshal(raw.Data, &vals); err != nil {
+		return nil, fmt.Errorf("malformed label values: %w", err)
+	}
+	sort.Strings(vals)
+	return vals, nil
+}
+
+// send issues a request and decodes the common envelope, turning API and HTTP
+// failures into errors. GET sends the form as the query string, POST as the
+// body.
+func (c *Client) send(ctx context.Context, method, path string, form url.Values) (*response, error) {
+	target := c.base + path
+	var body io.Reader
+	if method == http.MethodGet {
+		if len(form) > 0 {
+			target += "?" + form.Encode()
+		}
+	} else {
+		body = strings.NewReader(form.Encode())
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	if err != nil {
+		return nil, err
+	}
+	if method != http.MethodGet {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
 	req.Header.Set("Accept", "application/json")
 	switch {
 	case c.token != "":
@@ -171,13 +229,13 @@ func (c *Client) do(ctx context.Context, path string, form url.Values) ([]Series
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		return nil, err
 	}
 
 	var r response
-	jsonErr := json.Unmarshal(body, &r)
+	jsonErr := json.Unmarshal(respBody, &r)
 
 	// Prometheus reports bad queries as 4xx/5xx with a JSON error body, so
 	// prefer that message over the bare status when it is present.
@@ -185,7 +243,7 @@ func (c *Client) do(ctx context.Context, path string, form url.Values) ([]Series
 		if jsonErr == nil && r.Status == "error" {
 			return nil, apiError(&r, resp.Status)
 		}
-		return nil, fmt.Errorf("unexpected status %s: %s", resp.Status, snippet(body))
+		return nil, fmt.Errorf("unexpected status %s: %s", resp.Status, snippet(respBody))
 	}
 	if jsonErr != nil {
 		return nil, fmt.Errorf("malformed response: %w", jsonErr)
@@ -193,7 +251,7 @@ func (c *Client) do(ctx context.Context, path string, form url.Values) ([]Series
 	if r.Status != "success" {
 		return nil, apiError(&r, resp.Status)
 	}
-	return parseResult(r.Data.ResultType, r.Data.Result)
+	return &r, nil
 }
 
 func apiError(r *response, status string) error {

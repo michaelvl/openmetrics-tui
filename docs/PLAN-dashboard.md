@@ -574,9 +574,9 @@ Decisions taken (also in Phase 2) and what remains:
 - Default `agg` is none (instant value at the column offset).
 - The reconcile-ratio panel keeps its division, which assumes a user-defined
   `kube_customresource_info` series (kube-state-metrics custom-resource-state
-  config). The docs give a non-dividing variant for clusters without it. Still
-  to confirm in Phase 2 when writing the golden fixtures: that the example
-  validates and renders against the mock.
+  config). The docs give a non-dividing variant for clusters without it.
+  Confirmed in Phase 6: `examples/controllers.yaml` validates and every panel
+  returns rows against `cmd/mock-server` (`make check-example`).
 
 ## Appendix B: Example generated scrape config (design sketch, partly verified)
 

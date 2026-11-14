@@ -192,9 +192,11 @@ func TestManagedStartupFailureExitsWithStep(t *testing.T) {
 	}
 }
 
-func TestTUINotImplemented(t *testing.T) {
+// Without --check the TUI needs a backend, and says so before taking the
+// terminal; the placeholder message of earlier phases is gone.
+func TestTUIWithoutBackendIsUsageError(t *testing.T) {
 	code, _, errOut := run(writeDash(t, dash))
-	if code != 1 || !strings.Contains(errOut, "TUI not implemented yet (Phase 5)") {
+	if code != 2 || !strings.Contains(errOut, "--prom") || strings.Contains(errOut, "not implemented") {
 		t.Errorf("code %d, stderr %q", code, errOut)
 	}
 }

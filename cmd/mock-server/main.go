@@ -703,9 +703,11 @@ func main() {
 		state.Update()
 		state.Write(w)
 	})
+	newPromAPI(time.Now).register(http.DefaultServeMux)
 	fmt.Printf("Starting mock server on :%d\n", *port)
 	fmt.Printf("Try: curl http://localhost:%d/metrics\n", *port)
-	fmt.Printf("Or:  ./openmetrics-tui -url http://localhost:%d/metrics -filter-label method=get\n", *port)
+	fmt.Printf("Or:  ./omtui -url http://localhost:%d/metrics -filter-label method=get\n", *port)
+	fmt.Printf("Or:  ./omtui-dash examples/controllers.yaml (Prometheus API served on the same port)\n")
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", *port), nil); err != nil {
 		fmt.Printf("Error starting server: %v\n", err)
 	}

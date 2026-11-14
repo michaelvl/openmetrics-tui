@@ -1,0 +1,40 @@
+╭─┤ $namespace (1) ├─────╮╭─┤ $controller (2) ├────╮
+│prod                    ││.*                      │  Controller health  managed ctx=dev  ● ok
+╰────────────────────────╯╰────────────────────────╯  windows now 5m 15m 1h  ⟳ 10s (+/-)
+ Backend log, 32 lines  ↑↓ scroll  L/Esc close
+ vm: started
+ vm: scraping 3 targets
+ line a
+ line b
+ line c
+ line d
+ line e
+ line f
+ line g
+ line h
+ line i
+ line j
+ line k
+ line l
+ line m
+ line n
+ line o
+ line p
+ line q
+ line r
+ line s
+ line t
+ line u
+ line v
+ line w
+ line x
+ line y
+ line z
+ line a
+ line b
+ line c
+ line d
+
+
+
+? for help | ⟳ 10s (+/-) | Fold (space) | Sort (s): panel | Filter (/) | Log (L) | ● ok

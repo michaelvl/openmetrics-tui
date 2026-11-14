@@ -3,6 +3,12 @@
 A terminal-based tool to monitor OpenMetrics/Prometheus metrics in real-time. A
 simple alternative to `watch 'curl http://... | grep metric_*`' workflows.
 
+This repository ships two commands:
+
+- `omtui`: the live viewer for a single `/metrics` endpoint, described below.
+- `omtui-dash`: a terminal dashboard for PromQL queries, with an optional
+  managed mode for Kubernetes. See [omtui-dash](#omtui-dash-promql-dashboard).
+
 Metrics view:
 
 ![Screenshot-metrics](docs/screen1.png)
@@ -45,6 +51,9 @@ With Go:
 ```sh
 go install github.com/michaelvl/openmetrics-tui/cmd/omtui@latest
 ```
+
+The dashboard is installed the same way, from `cmd/omtui-dash`; see
+[Installing omtui-dash](#installing-omtui-dash).
 
 The binary is called `omtui`. It was previously called `openmetrics-tui`, so
 the old binary name and the old `go install` path no longer work.
@@ -229,3 +238,321 @@ headers inside the file are still relative ages (`-45s`, `Curr`, ...), measured
 from it. The footer briefly echoes `saved <path>` (or a `snapshot
 failed: ...`
 error) in place of `? for help`, clearing itself again after a few seconds.
+
+# omtui-dash: PromQL dashboard
+
+`omtui-dash` renders a YAML-defined dashboard in the terminal. Each panel is one
+PromQL query shown as a table of series with several time-window columns
+(`now`, `5m`, `15m`, ...), a sparkline and threshold colours, so you can see at
+a glance which controller, pod or queue is unhealthy right now and whether it
+was a minute ago.
+
+![Screenshot-dashboard](docs/dashboard.png)
+
+![Demo-dashboard](docs/dashboard.gif)
+
+It reads from any Prometheus-compatible HTTP API (Prometheus, VictoriaMetrics,
+Thanos, Mimir, ...). Alternatively, in _managed mode_ it starts its own
+short-lived backend that scrapes pods in your current Kubernetes context, so
+nothing has to be installed in the cluster.
+
+## Installing omtui-dash
+
+With Go:
+
+```sh
+go install github.com/michaelvl/openmetrics-tui/cmd/omtui-dash@latest
+```
+
+With Nix (flakes enabled):
+
+```sh
+nix run github:michaelvl/openmetrics-tui#omtui-dash -- --help
+nix profile install github:michaelvl/openmetrics-tui#omtui-dash
+```
+
+The Nix package puts `victoria-metrics` on the `PATH` of `omtui-dash` (after any
+`victoria-metrics` you already have), which managed mode needs. With `go
+install` you install VictoriaMetrics yourself, or point `--vm-bin` at it.
+`kubectl` is never bundled; managed mode uses your own.
+
+## Quick start
+
+No cluster is needed to try it. The mock server in this repository serves
+synthetic data for the queries in `examples/controllers.yaml`:
+
+```sh
+make run-dash
+```
+
+which builds both programs, starts the mock on port 8080, runs the dashboard
+against it and stops the mock again on exit. By hand, in two terminals:
+
+```sh
+go run ./cmd/mock-server -port 8080
+go run ./cmd/omtui-dash --prom http://localhost:8080 examples/controllers.yaml
+```
+
+`make check-example` validates the example and runs each of its queries once.
+
+Against a real backend:
+
+```sh
+omtui-dash --prom http://localhost:9090 my-dashboard.yaml
+omtui-dash --prom http://localhost:9090 --var namespace=staging my-dashboard.yaml
+```
+
+## Backends
+
+The backend is chosen in this order:
+
+1. `--prom URL`: use an existing Prometheus-compatible API. Nothing is started.
+   Credentials, if needed, are given with `--prom-token-file` (bearer token) or
+   `--prom-user` plus `--prom-password-file`.
+2. `--managed`: start `kubectl proxy` and a local VictoriaMetrics that scrapes
+   pods through the Kubernetes API, using the current kubeconfig context (or
+   `--kube-context`). `datasource.url` in the YAML is ignored. Both children
+   are stopped when the dashboard exits.
+3. Neither flag: use `datasource.url` from the YAML. If that is missing too,
+   `omtui-dash` exits with a message listing the options.
+
+`--prom` and `--managed` cannot be combined, and the managed-only flags are
+rejected without `--managed`.
+
+Managed mode, prerequisites, RBAC, cold start and caveats are covered in
+[docs/kubernetes-local.md](docs/kubernetes-local.md).
+
+```sh
+omtui-dash --managed examples/controllers.yaml
+omtui-dash --managed --kube-context staging --namespace prod --data-dir ~/.cache/omtui-dash my-dashboard.yaml
+```
+
+## Flags
+
+Usage: `omtui-dash [flags] dashboard.yaml`. Go's flag package accepts `-flag`
+and `--flag` alike.
+
+| Flag | Meaning |
+| --- | --- |
+| `--check` | Validate the YAML, run every panel query once, print one status line per panel and exit non-zero if any panel failed. See [Checking a dashboard](#checking-a-dashboard). |
+| `--var name=value` | Set a variable, overriding its `default`. Repeatable. The value must pass the variable's `pattern`; an unknown name is an error. |
+| `--prom URL` | Prometheus-compatible API to query. Overrides `datasource.url`. |
+| `--prom-token-file FILE` | File holding a bearer token for `--prom`. |
+| `--prom-user USER` | Basic-auth user for `--prom`. |
+| `--prom-password-file FILE` | File holding the basic-auth password. |
+| `--managed` | Start `kubectl proxy` and a local VictoriaMetrics (managed mode). |
+| `--kube-context NAME` | `kubectl` context for `--managed` (default: the current context). |
+| `--namespace NS` | Scrape only this namespace; overrides `scrape.namespaces`. |
+| `--kubectl-bin PATH` | `kubectl` binary (default: `kubectl` on `PATH`). |
+| `--vm-bin PATH` | `victoria-metrics` binary (default: `victoria-metrics` on `PATH`). |
+| `--data-dir DIR` | Keep the managed storage in `DIR`, so history survives restarts. Default: a temporary directory removed on exit. |
+| `--retention DUR` | Managed data retention (default `24h`). A unit suffix is required (`s m h d w M y`) and values below `24h` are rejected, because VictoriaMetrics does not accept them. |
+| `--scrape-config FILE` | Use your own VictoriaMetrics scrape config instead of the generated one. `${KUBE_PROXY}` in it is replaced by the proxy address, `127.0.0.1:PORT`. |
+| `--log-file FILE` | Append the output of `kubectl` and `victoria-metrics` to `FILE`. |
+
+`--kube-context`, `--namespace`, `--kubectl-bin`, `--vm-bin`, `--data-dir`,
+`--retention`, `--scrape-config` and `--log-file` only apply with `--managed`.
+
+## Dashboard YAML reference
+
+Unknown keys are errors, and every problem is reported with its line number.
+`examples/controllers.yaml` is a complete, commented example.
+
+```yaml
+title: Controller health          # required
+datasource:
+  url: http://localhost:9090      # used when neither --prom nor --managed is given
+refresh: 10s                      # default 10s, minimum 1s
+windows: [now, 5m, 15m, 1h]       # the default; "now" first, then increasing
+spark: 1h                         # sparkline range, default 1h
+variables:
+  namespace:
+    default: prod
+    pattern: '^[a-z0-9-]+$'
+scrape:                           # managed mode only
+  namespaces: [prod]
+panels:
+  - title: Reconcile error ratio  # required, unique
+    query: |                      # required, PromQL
+      sum by (controller) (rate(errors_total{namespace="${namespace}"}[5m]))
+    label: "{{controller}}"
+    unit: percent
+    thresholds:
+      - { gt: 0.05, color: red }
+      - { gt: 0.01, color: yellow }
+      - { color: green }
+```
+
+### Top level
+
+| Key | Meaning |
+| --- | --- |
+| `title` | Required. Shown in the status line. |
+| `datasource.url` | Backend URL when no flag chooses one. Must be a full URL. |
+| `refresh` | Refresh interval, a duration such as `10s` or `1m`. Default `10s`. |
+| `windows` | The value columns. See [Windows and `agg`](#windows-and-agg). |
+| `spark` | Range of the sparkline. Default `1h`. |
+| `variables` | Editable query parameters, see [Variables](#variables). At most 9. |
+| `scrape` | Managed-mode scrape settings, see [Scrape section](#scrape-section). |
+| `panels` | Required, at least one. |
+
+Durations use the Prometheus syntax: `30s`, `5m`, `1h`, `1d`.
+
+### Panels
+
+| Key | Meaning |
+| --- | --- |
+| `title` | Required, unique within the dashboard. |
+| `query` | Required. A PromQL query. Each series returned becomes a row. `${name}` is replaced by the value of a variable. The query is syntax-checked at load time. |
+| `label` | Row title template. Only `{{labelname}}` substitutions are supported. Without it, or when a label is missing, the row is titled with the series labels as `{k=v,...}`. |
+| `unit` | `percent` multiplies the value by 100 and adds `%`. `s` and `/min` show the plain number and add the unit to the panel title as `(s)` or `(/min)`; `none` or no unit adds nothing. Thresholds always compare the raw value. |
+| `thresholds` | Colour rules, see below. |
+| `sort` | `asc` or `desc` by the `now` column. Without it the response order is kept. |
+| `limit` | Keep only the first N rows after sorting, so `sort: desc` with `limit` is a top-N. |
+| `agg` | `avg`, `max` or `min`, see below. |
+| `folded` | Start the panel folded to a single summary line. Default `false`. |
+
+### Thresholds
+
+An ordered list, evaluated per cell; the first match wins. Each entry has a
+`color` and at most one comparison: `gt`, `gte`, `lt` or `lte`. An entry with no
+comparison is the catch-all and must come last. A cell that matches nothing is
+drawn uncoloured.
+
+```yaml
+thresholds:
+  - { gt: 5, color: red }
+  - { gt: 1, color: yellow }
+  - { color: green }
+```
+
+`color` is `red`, `yellow`, `green`, `orange`, `blue`, `purple`, `cyan` or
+`grey`; any other value is passed to the terminal as a colour name or number
+(for example `"213"` or `"#ff8800"`).
+
+### Windows and `agg`
+
+`windows` is one list of offsets, `now` first, each larger than the one before.
+By default a column shows the value at `end - offset` (the instant, snapped to
+the nearest query step), so `5m` is the value five minutes ago.
+
+Set `agg` on a panel to show instead the aggregate over the trailing window
+`[end - offset, end]` for every column except `now`. The `15m` column of an `agg: max`
+panel then shows the maximum over the last fifteen minutes. All columns and the
+sparkline come from one range query per panel.
+
+### Variables
+
+```yaml
+variables:
+  namespace:
+    default: prod
+    pattern: '^[a-z0-9-]+$'
+  controller:
+    default: ".*"
+    regex: true
+```
+
+Variables are referenced in queries as `${name}` and shown in the header as
+`$name`. Each gets a header box opened by the number key of its declaration
+order (`1` to `9`).
+
+| Key | Meaning |
+| --- | --- |
+| `default` | Required. The initial value. `--var` overrides it. |
+| `pattern` | Regex a value must match before it is substituted. Default `^[A-Za-z0-9_.:/-]*$`. |
+| `regex` | `true` allows regex metacharacters (for `label=~"${name}"` matchers); the value must then be a valid regex. With `regex: true` and no `pattern`, any valid regex is accepted. |
+| `options` | Where suggestions come from, see below. |
+
+Substituted values are escaped for a PromQL string literal, so a value can never
+break out of the matcher it sits in. A variable no query uses produces a
+warning.
+
+Suggestions in the edit box are derived automatically: a matcher such as
+`namespace="${namespace}"` or `controller=~"${controller}"` in a query names the
+label and the surrounding selector, and the values come from the backend's
+label-values API. Other variables are substituted with their current values, so
+the lists cascade. `options` overrides this:
+
+```yaml
+options: [prod, staging]                                   # fixed list
+options: { label_values: { metric: kube_pod_info, label: namespace } }
+options: false                                             # free text only
+```
+
+If the lookup fails or returns nothing, the box is free text. A typed value that
+is not in the list is still accepted if it matches `pattern`.
+
+Variables only filter queries. They do not change what managed mode scrapes.
+
+### Scrape section
+
+Used only with `--managed`; ignored otherwise. It controls what the generated
+scrape config collects.
+
+| Key | Meaning |
+| --- | --- |
+| `namespaces` | Required when the section is present. Namespaces to scrape. `--namespace` overrides it. |
+| `interval` | Scrape interval, at least `1s`. Default `15s`. |
+| `selector` | A pod label selector, such as `app=my-controller`. Cannot be combined with `annotation`. |
+| `annotation` | Annotation name that opts a pod in when set to `"true"`, such as `prometheus.io/scrape`. In this mode `port` and `path` name annotations. |
+| `port` | Annotation mode: the annotation holding the port (default `prometheus.io/port`). Otherwise a port number. |
+| `path` | Annotation mode: the annotation holding the path (default `prometheus.io/path`, falling back to `/metrics`). Otherwise a literal path starting with `/` (default `/metrics`). |
+
+Only pods in phase `Running` are scraped, and a pod must declare at least one
+container port to become a target. Without a `scrape` section, every Running
+pod with a declared container port in all namespaces is scraped. Without
+`annotation` and `port`, every declared container port of a matching pod is
+scraped, so set `port` for precision. See
+[docs/kubernetes-local.md](docs/kubernetes-local.md) for the details and
+limits.
+
+## Key bindings
+
+| Key | Action |
+| --- | --- |
+| `1` to `9` | Edit variable by number. `Enter` applies, `Esc` cancels, `Tab` / `Shift+Tab` applies and moves to the next or previous box. `Up` / `Down` choose a suggestion and `Tab` or `Enter` accepts it. |
+| `Tab` / `Shift+Tab` | Next / previous panel. |
+| `Up` `Down` / `k` `j` | Move the row cursor (between panels when the panel is folded). |
+| `Space` / `Enter` | Fold or unfold the active panel. |
+| `z` | Fold all panels, or unfold all if all are folded. |
+| `s` | Cycle sort: the panel's YAML order, `now` descending, `now` ascending, label. |
+| `/` | Filter rows by case-insensitive substring of the row title, live as you type. `Enter` keeps it, `Esc` discards it. |
+| `r` | Refresh now. |
+| `p` | Pause or resume refreshing. |
+| `+` / `-` | Shorter / longer refresh interval (1s up to 5m). |
+| `PgUp` `PgDn` `Home` `End` | Scroll the dashboard. |
+| `S` | Save a plain-text snapshot to `omtui-dash-snapshot-<timestamp>.txt` in the working directory. |
+| `L` | Managed mode: show the `kubectl` / VictoriaMetrics log. |
+| `R` | Managed mode: restart a failed child process. |
+| `?` | Help. |
+| `q`, `Ctrl+C` | Quit. |
+
+While a variable box or the filter is open, every key goes to the input,
+including digits and `q`.
+
+A folded panel shows `▸ title`, the number of rows per colour and the worst row.
+Folded panels keep querying, so a fully folded dashboard is a live overview. A
+panel that fails shows its error on the panel without blanking the others.
+
+## Checking a dashboard
+
+```sh
+omtui-dash --check --prom http://localhost:9090 my-dashboard.yaml
+```
+
+`--check` loads and validates the YAML (including PromQL syntax of every query,
+with variable defaults substituted), then runs each query once against the
+backend and prints a line per panel:
+
+```
+ok    Workqueue depth: 2 rows
+ok    Pod restarts (1h): 0 rows (no data)
+FAIL  API server p99 latency: ...
+```
+
+The exit status is `0` when every panel ran, `1` if a panel failed or the
+backend could not start, and `2` for usage errors. Validation errors are
+reported without contacting the backend. The command is suitable for CI, with the backend being the mock
+server or a real one. `make check-example` does this for the bundled example.
+A panel that returns no series counts as a success and is flagged `(no data)`.

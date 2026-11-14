@@ -300,3 +300,56 @@ func TestStep(t *testing.T) {
 		t.Errorf("%d points for step %v", n, step)
 	}
 }
+
+func TestLabelValues(t *testing.T) {
+	var gotMethod, gotPath, gotAuth string
+	var gotMatch []string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotAuth = r.Method, r.URL.EscapedPath(), r.Header.Get("Authorization")
+		gotMatch = r.URL.Query()["match[]"]
+		serve(200, `{"status":"success","data":["prod","dev","staging"]}`)(w, r)
+	}, func(o *Options) { o.TokenFile = writeFile(t, "tok\n") })
+
+	got, err := c.LabelValues(context.Background(), "namespace", `up{job="a"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "dev,prod,staging"; strings.Join(got, ",") != want {
+		t.Errorf("values = %v, want sorted %s", got, want)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/v1/label/namespace/values" {
+		t.Errorf("request = %s %s", gotMethod, gotPath)
+	}
+	if len(gotMatch) != 1 || gotMatch[0] != `up{job="a"}` {
+		t.Errorf("match[] = %v", gotMatch)
+	}
+	if gotAuth != "Bearer tok" {
+		t.Errorf("Authorization = %q", gotAuth)
+	}
+}
+
+func TestLabelValuesWithoutMatchAndEscapedLabel(t *testing.T) {
+	var gotPath, gotQuery string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.EscapedPath(), r.URL.RawQuery
+		serve(200, `{"status":"success","data":[]}`)(w, r)
+	}, nil)
+	got, err := c.LabelValues(context.Background(), "a/b", "")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	if gotPath != "/api/v1/label/a%2Fb/values" || gotQuery != "" {
+		t.Errorf("path %q query %q", gotPath, gotQuery)
+	}
+}
+
+func TestLabelValuesErrors(t *testing.T) {
+	c := newTestClient(t, serve(400, `{"status":"error","errorType":"bad_data","error":"bad match"}`), nil)
+	if _, err := c.LabelValues(context.Background(), "x", "{"); err == nil || !strings.Contains(err.Error(), "bad match") {
+		t.Errorf("err = %v, want the API message", err)
+	}
+	c = newTestClient(t, serve(200, `{"status":"success","data":{"resultType":"matrix"}}`), nil)
+	if _, err := c.LabelValues(context.Background(), "x", ""); err == nil {
+		t.Error("an object where a list is expected should be an error")
+	}
+}

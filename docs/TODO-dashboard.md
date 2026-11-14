@@ -67,29 +67,29 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 
 ## Phase 5: TUI (`cmd/omtui-dash`)
 
-- [ ] Bubbletea model (panels, cursors, active panel, error state)
-- [ ] Refresh loop per panel, partial failures, back-off, generation counter
-- [ ] Layout with shared column grid, scrolling, narrow-width degradation
-- [ ] Folding (per panel, `z` all, live summaries, error on folded line)
-- [ ] Header bar with variable boxes (`1`-`9`), shared `textinput`, validation in footer
-- [ ] Suggestion overlay (substring filter, 8 rows, "N more", "k of n values", cached lookups)
-- [ ] Keys: tab, up/down, space/enter, `s`, `/`, `r`, `p`, `+`/`-`, `?`, `q`, `L`, `R`
-- [ ] Footer in `Name (key)` style; per-panel threshold legend
-- [ ] Status line (title, backend mode, child health); cold-start and "no data (not scraped?)" notes
-- [ ] Snapshot-to-file
-- [ ] Tests: golden view strings at fixed widths, update loop with fake `Querier`
+- [x] Bubbletea model (panels, cursors, active panel, error state)
+- [x] Refresh loop per panel, partial failures, back-off, generation counter
+- [x] Layout with shared column grid, scrolling, narrow-width degradation
+- [x] Folding (per panel, `z` all, live summaries, error on folded line)
+- [x] Header bar with variable boxes (`1`-`9`), shared `textinput`, validation in footer (boxes that do not fit are hidden, the edited one takes the last slot, instead of a popup)
+- [x] Suggestion overlay (substring filter, 8 rows, "N more", "k of n values", cached lookups)
+- [x] Keys: tab, up/down, space/enter, `s`, `/`, `r`, `p`, `+`/`-`, `?`, `q`, `L`, `R`
+- [x] Footer in `Name (key)` style; per-panel threshold legend
+- [x] Status line (title, backend mode, child health); cold-start and "no data (not scraped?)" notes (child health, `L` and `R` tested with a fake `Backend` only; not run against a real managed backend)
+- [x] Snapshot-to-file
+- [x] Tests: golden view strings at fixed widths, update loop with fake `Querier`
 
 ## Phase 6: Mock backend and demo
 
-- [ ] `cmd/mock-server`: `/api/v1/query_range` and `/api/v1/query` with synthetic matrices
-- [ ] `examples/controllers.yaml` working against the mock
-- [ ] screenshots in `docs/`
+- [x] `cmd/mock-server`: `/api/v1/query_range`, `/api/v1/query` and `/api/v1/label/<label>/values` with synthetic data
+- [x] `examples/controllers.yaml` working against the mock (`make check-example`)
+- [x] `docs/dashboard.tape`, `docs/dashboard.gif`, `docs/dashboard.png` (`make demo`)
 
 ## Phase 7: Documentation
 
-- [ ] README section: YAML reference, keys, flags, backend modes
-- [ ] `docs/kubernetes-local.md`: managed mode, RBAC, cold start, load caveats, manual recipe, `--prom` with port-forward
-- [ ] Makefile targets: `build`, `dash`, `run-dash`
+- [x] README section: YAML reference, keys, flags, backend modes
+- [x] `docs/kubernetes-local.md`: managed mode, RBAC, cold start, load caveats, manual recipe, `--prom` with port-forward
+- [x] Makefile targets: `build`, `dash`, `run-dash`
 
 ## Checkpoints
 

@@ -1,6 +1,5 @@
 // Package dashapp is the omtui-dash command: flag handling, backend
-// selection (external or managed) and the --check mode. The TUI arrives in
-// Phase 5.
+// selection (external or managed), the --check mode and the TUI launch.
 package dashapp
 
 import (
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/michaelvl/openmetrics-tui/internal/dashboard"
+	"github.com/michaelvl/openmetrics-tui/internal/dashtui"
 	"github.com/michaelvl/openmetrics-tui/internal/managed"
 	"github.com/michaelvl/openmetrics-tui/internal/promapi"
 )
@@ -122,14 +122,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	if !cfg.check {
-		_, _ = fmt.Fprintln(stderr, "omtui-dash: TUI not implemented yet (Phase 5); use --check to validate and query the dashboard")
-		return 1
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	q, closeBackend, err := newBackend(ctx, &cfg, d, stderr)
+	be, err := newBackend(ctx, &cfg, d, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "omtui-dash: %v\n", err)
 		var se *managed.StartError
@@ -138,38 +133,65 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 2
 	}
-	defer closeBackend()
-	if Check(ctx, d, vals, q, time.Now(), stdout) > 0 {
+	defer be.close()
+	if cfg.check {
+		if Check(ctx, d, vals, be.q, time.Now(), stdout) > 0 {
+			return 1
+		}
+		return 0
+	}
+	opts := dashtui.Options{Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode}
+	if be.managed != nil {
+		opts.Backend = be.managed
+	}
+	if err := dashtui.Run(ctx, opts); err != nil && ctx.Err() == nil {
+		_, _ = fmt.Fprintf(stderr, "omtui-dash: %v\n", err)
 		return 1
 	}
 	return 0
 }
 
-// newBackend picks the backend (see managed.SelectMode) and returns its
-// Querier and a function that releases it. Startup failures of the managed
-// backend are reported before anything else happens.
-func newBackend(ctx context.Context, cfg *config, d *dashboard.Dashboard, stderr io.Writer) (promapi.Querier, func(), error) {
+// backend is the chosen data source: its Querier, a label for the status line,
+// the managed supervisor (nil for an external backend) and its release.
+type backend struct {
+	q       promapi.Querier
+	mode    string
+	managed *managed.Backend
+	close   func()
+}
+
+// newBackend picks the backend (see managed.SelectMode) and returns it.
+// Startup failures of the managed backend are reported before anything else
+// happens.
+func newBackend(ctx context.Context, cfg *config, d *dashboard.Dashboard, stderr io.Writer) (*backend, error) {
 	mode, url, err := managed.SelectMode(cfg.promURL, cfg.managed, d.Datasource.URL)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if mode == managed.ModeExternal {
 		opts := cfg.opts
 		opts.URL = url
 		q, err := promapi.New(opts)
-		return q, func() {}, err
+		if err != nil {
+			return nil, err
+		}
+		return &backend{q: q, mode: "external " + url, close: func() {}}, nil
 	}
 	mopts := cfg.mopts
 	mopts.Scrape = d.Scrape
 	mopts.Interactive = stderr
 	b, err := managed.Start(ctx, mopts)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	for _, w := range b.Warnings() {
 		_, _ = fmt.Fprintf(stderr, "omtui-dash: warning: %s\n", w)
 	}
-	return b.Querier(), func() { _ = b.Close() }, nil
+	ctxName := cfg.mopts.KubeContext
+	if ctxName == "" {
+		ctxName = "current context"
+	}
+	return &backend{q: b.Querier(), mode: "managed " + ctxName, managed: b, close: func() { _ = b.Close() }}, nil
 }
 
 const (

@@ -1,0 +1,3 @@
+line 5: panel "A": label template: unterminated "{{"
+line 8: panel "B": label template: "a-b" is not a label name; only {{labelname}} is supported
+line 11: panel "C": label template: unmatched "}}"

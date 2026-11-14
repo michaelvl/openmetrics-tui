@@ -1,0 +1,14 @@
+title: PromQL
+variables:
+  ns:
+    default: prod
+panels:
+  - title: Syntax
+    query: sum(rate(foo{namespace="${ns}"}[5m])
+  - title: Block
+    query: |
+      sum by (x) (
+        rate(foo[5m])
+      ) +
+  - title: Undefined variable
+    query: up{job="${nope}"}

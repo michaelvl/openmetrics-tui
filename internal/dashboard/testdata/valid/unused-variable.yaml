@@ -1,0 +1,9 @@
+title: Unused
+variables:
+  used:
+    default: a
+  extra:
+    default: b
+panels:
+  - title: A
+    query: up{x="${used}"}

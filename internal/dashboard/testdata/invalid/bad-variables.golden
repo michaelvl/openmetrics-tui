@@ -1,0 +1,7 @@
+line 3: at most 9 variables are supported, found 11
+line 4: variable "a": default: value "x y" does not match pattern ^[A-Za-z0-9_.:/-]*$
+line 5: variable "b": default is required
+line 8: variable "c": default: value "(" is not a valid regex: error parsing regexp: missing closing ): `(`
+line 12: unknown key "flavour"
+line 13: variable "d": options must be a list, false, or {label_values: {metric, label}}
+line 16: variable "e": label_values needs both metric and label

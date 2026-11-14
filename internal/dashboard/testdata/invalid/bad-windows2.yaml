@@ -1,0 +1,5 @@
+title: Windows
+windows: [now, 15m, 5m, banana]
+panels:
+  - title: A
+    query: up

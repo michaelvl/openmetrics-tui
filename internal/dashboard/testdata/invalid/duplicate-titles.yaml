@@ -1,0 +1,6 @@
+title: Dups
+panels:
+  - title: Same
+    query: up
+  - title: Same
+    query: up

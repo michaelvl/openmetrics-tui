@@ -15,9 +15,9 @@
           version = self.shortRev or self.dirtyShortRev or "dev";
           src = ./.;
 
-          vendorHash = "sha256-RORd99onHfJbfRaD/q0NclbvTxjOkmKOpH2U12WtWb4=";
+          vendorHash = "sha256-NI6lhIpL7lelN/ZWdoxG8nusSzfNtVUqRPfKmJLywvM=";
 
-          subPackages = [ "cmd/omtui" ];
+          subPackages = [ "cmd/omtui" "cmd/omtui-dash" ];
           env.CGO_ENABLED = 0;
           ldflags = [ "-s" "-w" ];
 

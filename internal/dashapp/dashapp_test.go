@@ -1,0 +1,144 @@
+package dashapp
+
+import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const dash = `title: T
+variables:
+  ns: {default: prod}
+panels:
+  - title: Good
+    query: up{namespace="${ns}"}
+  - title: Empty
+    query: nothing
+  - title: Broken
+    query: broken
+`
+
+func writeDash(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "d.yaml")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func fakeBackend(t *testing.T, seen *[]string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		if seen != nil {
+			*seen = append(*seen, q)
+		}
+		switch {
+		case strings.HasPrefix(q, "broken"):
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"status":"error","errorType":"bad_data","error":"boom"}`))
+		case strings.HasPrefix(q, "nothing"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[` +
+				`{"metric":{"a":"1"},"values":[[1700000000,"1"]]},{"metric":{"a":"2"},"values":[[1700000000,"2"]]}]}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func run(args ...string) (int, string, string) {
+	var out, errb bytes.Buffer
+	code := Run(args, &out, &errb)
+	return code, out.String(), errb.String()
+}
+
+func TestCheckAgainstFakeBackend(t *testing.T) {
+	var seen []string
+	srv := fakeBackend(t, &seen)
+	path := writeDash(t, dash)
+
+	code, out, errOut := run("--check", "--prom", srv.URL, "--var", "ns=staging", path)
+	if code != 1 {
+		t.Fatalf("code %d, stderr %q", code, errOut)
+	}
+	for _, want := range []string{
+		"ok    Good: 2 rows",
+		"ok    Empty: 0 rows (no data)",
+		"FAIL  Broken: bad_data: boom",
+		"1 of 3 panels failed",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	if len(seen) != 3 || seen[0] != `up{namespace="staging"}` {
+		t.Errorf("queries: %q", seen)
+	}
+}
+
+func TestCheckSuccessUsesDatasourceURL(t *testing.T) {
+	srv := fakeBackend(t, nil)
+	body := strings.Replace(dash, "title: T\n", "title: T\ndatasource: {url: "+srv.URL+"}\n", 1)
+	body = body[:strings.Index(body, "  - title: Empty")]
+	code, out, errOut := run("--check", writeDash(t, body))
+	if code != 0 {
+		t.Fatalf("code %d\n%s\n%s", code, out, errOut)
+	}
+}
+
+func TestCheckValidationErrorNeedsNoBackend(t *testing.T) {
+	path := writeDash(t, "title: T\npanels:\n  - {title: A, query: 'sum('}\n")
+	code, _, errOut := run("--check", "--prom", "http://127.0.0.1:1", path)
+	if code != 1 || !strings.Contains(errOut, "d.yaml:3: panel \"A\": invalid query") {
+		t.Errorf("code %d, stderr %q", code, errOut)
+	}
+}
+
+func TestNoBackend(t *testing.T) {
+	code, _, errOut := run("--check", writeDash(t, "title: T\npanels:\n  - {title: A, query: up}\n"))
+	if code != 2 || !strings.Contains(errOut, "no backend") {
+		t.Errorf("code %d, stderr %q", code, errOut)
+	}
+}
+
+func TestManagedFlagsAreStubs(t *testing.T) {
+	path := writeDash(t, dash)
+	for _, args := range [][]string{
+		{"--managed"}, {"--kube-context", "x"}, {"--namespace", "x"}, {"--kubectl-bin", "x"},
+		{"--vm-bin", "x"}, {"--data-dir", "x"}, {"--retention", "1d"},
+		{"--scrape-config", "x"}, {"--log-file", "x"},
+	} {
+		code, _, errOut := run(append(args, "--check", path)...)
+		if code != 2 || !strings.Contains(errOut, "not implemented yet") || !strings.Contains(errOut, args[0]) {
+			t.Errorf("%v: code %d, stderr %q", args, code, errOut)
+		}
+	}
+}
+
+func TestTUINotImplemented(t *testing.T) {
+	code, _, errOut := run(writeDash(t, dash))
+	if code != 1 || !strings.Contains(errOut, "TUI not implemented yet (Phase 5)") {
+		t.Errorf("code %d, stderr %q", code, errOut)
+	}
+}
+
+func TestBadVarAndUsage(t *testing.T) {
+	path := writeDash(t, dash)
+	if code, _, _ := run("--var", "nope=1", "--check", path); code != 2 {
+		t.Errorf("unknown var: code %d", code)
+	}
+	if code, _, _ := run("--var", "novalue", path); code != 2 {
+		t.Errorf("malformed --var: code %d", code)
+	}
+	if code, _, _ := run(); code != 2 {
+		t.Errorf("no args: code %d", code)
+	}
+}

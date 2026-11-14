@@ -1,0 +1,3 @@
+line 3: scrape.namespaces is required and must list at least one namespace
+line 3: scrape.interval "soon" must be a duration of at least 1s
+line 4: scrape.selector and scrape.annotation are mutually exclusive

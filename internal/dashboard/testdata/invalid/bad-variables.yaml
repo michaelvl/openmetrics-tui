@@ -1,0 +1,25 @@
+title: Variables
+variables:
+  a:
+    default: "x y"
+  b:
+    pattern: "^[a-z]+$"
+  c:
+    default: "("
+    regex: true
+  d:
+    default: x
+    flavour: salty
+    options: true
+  e:
+    default: x
+    options: { label_values: { metric: m } }
+  f: { default: x }
+  g: { default: x }
+  h: { default: x }
+  i: { default: x }
+  j: { default: x }
+  k: { default: x }
+panels:
+  - title: A
+    query: up{a="${a}", b="${b}", c="${c}", d="${d}", e="${e}"}

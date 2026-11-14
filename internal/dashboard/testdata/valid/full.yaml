@@ -1,0 +1,36 @@
+title: Full
+datasource:
+  url: http://localhost:9090
+refresh: 5s
+windows: [now, 1m, 1h, 1d]
+spark: 30m
+variables:
+  ns:
+    default: prod
+    options: [prod, staging]
+  job:
+    default: ".*"
+    regex: true
+    options: false
+  svc:
+    default: api
+    options:
+      label_values: { metric: kube_service_info, label: service }
+scrape:
+  namespaces: [prod]
+  selector: app=foo
+  port: "8080"
+  path: /metrics
+panels:
+  - title: Load
+    query: avg(node_load1{namespace="${ns}", job=~"${job}", service="${svc}"})
+    label: "{{instance}} in {{ job }}"
+    unit: none
+    agg: max
+    sort: asc
+    limit: 3
+    folded: true
+    thresholds:
+      - { gte: 4, color: red }
+      - { lt: 1, color: green }
+      - { color: yellow }

@@ -1,0 +1,5 @@
+datasource:
+  url: http://localhost:9090
+panels:
+  - query: up
+  - title: No query

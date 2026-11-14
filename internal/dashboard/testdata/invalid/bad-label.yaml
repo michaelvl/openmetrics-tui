@@ -1,0 +1,11 @@
+title: Labels
+panels:
+  - title: A
+    query: up
+    label: "{{instance}"
+  - title: B
+    query: up
+    label: "{{ a-b }}"
+  - title: C
+    query: up
+    label: "oops }}"

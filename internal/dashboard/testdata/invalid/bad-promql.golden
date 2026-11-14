@@ -1,0 +1,3 @@
+line 7: panel "Syntax": invalid query: 1:36: parse error: unclosed left parenthesis
+line 9: panel "Block": invalid query: 4:1: parse error: unexpected end of input
+line 14: panel "Undefined variable": query references undefined variable ${nope}

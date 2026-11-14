@@ -1,0 +1,7 @@
+title: Typos
+refesh: 10s
+panels:
+  - title: A
+    query: up
+    unit: percent
+    threshhold: []

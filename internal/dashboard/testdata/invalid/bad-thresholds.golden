@@ -1,0 +1,8 @@
+line 6: panel "A": catch-all threshold 1 must be last; later entries can never match
+line 7: panel "A": threshold 2 has more than one comparison (use one of gt, gte, lt, lte)
+line 8: panel "A": threshold 3 needs a color
+line 11: panel "B": unknown unit "furlongs" (want percent, s, /min or none)
+line 12: panel "B": unknown agg "median" (want avg, max or min)
+line 13: panel "B": unknown sort "up" (want asc or desc)
+line 14: panel "B": limit must be a positive integer
+line 16: cannot unmarshal !!str `abc` into float64

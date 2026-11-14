@@ -1,0 +1,2 @@
+line 2: window "5m" must be larger than the one before it
+line 2: invalid window "banana": want a positive duration such as 5m or 1h

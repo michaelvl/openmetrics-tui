@@ -27,15 +27,15 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 
 ## Phase 2: Dashboard definition (`internal/dashboard`, `cmd/omtui-dash`)
 
-- [ ] Create `cmd/omtui-dash` entry point with `--check`, `--var`, `--prom`, managed flags (stubs)
-- [ ] YAML types (dashboard, panel, variables, `scrape:`) with `yaml.v3`, `KnownFields(true)`, line numbers via `yaml.Node`
-- [ ] `windows` offsets, `agg`, `unit`, `thresholds`, `label` template, `sort`, `limit`, `folded`
-- [ ] Variables: `default`, `options`, `pattern`, `regex`; max nine; escape for PromQL string literal
-- [ ] Validation with line-numbered errors (required fields, unknown keys, window syntax, thresholds, label template, duplicate titles, unused variable warning)
-- [ ] Offline PromQL syntax check via `promql/parser` (`Validate(query) error`)
-- [ ] `--check`: run every query, per-panel status, non-zero exit on failure
-- [ ] Golden YAML fixtures, valid and invalid
-- [ ] Confirm Appendix A example validates
+- [x] Create `cmd/omtui-dash` entry point with `--check`, `--var`, `--prom`, managed flags (stubs)
+- [x] YAML types (dashboard, panel, variables, `scrape:`) with `yaml.v3`, `KnownFields(true)`, line numbers via `yaml.Node`
+- [x] `windows` offsets, `agg`, `unit`, `thresholds`, `label` template, `sort`, `limit`, `folded`
+- [x] Variables: `default`, `options`, `pattern`, `regex`; max nine; escape for PromQL string literal
+- [x] Validation with line-numbered errors (required fields, unknown keys, window syntax, thresholds, label template, duplicate titles, unused variable warning)
+- [x] Offline PromQL syntax check via `promql/parser` (`Validate(query) error`)
+- [x] `--check`: run every query, per-panel status, non-zero exit on failure
+- [x] Golden YAML fixtures, valid and invalid
+- [x] Confirm Appendix A example validates
 
 ## Phase 3: Pure logic
 

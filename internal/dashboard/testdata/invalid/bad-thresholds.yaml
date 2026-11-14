@@ -1,0 +1,16 @@
+title: Thresholds
+panels:
+  - title: A
+    query: up
+    thresholds:
+      - { color: green }
+      - { gt: 1, lt: 5, color: red }
+      - { gt: 3 }
+  - title: B
+    query: up
+    unit: furlongs
+    agg: median
+    sort: up
+    limit: 0
+    thresholds:
+      - { gt: abc, color: red }

@@ -1,0 +1,10 @@
+title: Scrape
+scrape:
+  interval: soon
+  selector: app=foo
+  annotation: prometheus.io/scrape
+  port: http
+  path: metrics
+panels:
+  - title: A
+    query: up

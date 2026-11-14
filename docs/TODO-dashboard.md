@@ -39,14 +39,14 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 
 ## Phase 3: Pure logic
 
-- [ ] Selector extraction (`Selectors(query)`) with placeholder + `parser.Inspect`; tests for regex, multiple selectors, nested, unparseable, cascading
-- [ ] Window extraction (columns, `agg`, step alignment, gaps, `NaN`, earliest sample time)
-- [ ] Threshold evaluation (`gt/gte/lt/lte`, catch-all)
-- [ ] Label templates with `{k=v,...}` fallback
-- [ ] Unit formatting (`percent`, `s`, `/min`, plain), copied helpers
-- [ ] Sort and limit
-- [ ] Folded panel summary (colour counts, worst row, ties, no thresholds, empty)
-- [ ] Sparkline rendering (resample, flat, empty)
+- [x] Selector extraction (`Selectors(query)`) with placeholder + `parser.Inspect`; tests for regex, multiple selectors, nested, unparseable, cascading
+- [x] Window extraction (columns, `agg`, step alignment, gaps, `NaN`, earliest sample time)
+- [x] Threshold evaluation (`gt/gte/lt/lte`, catch-all)
+- [x] Label templates with `{k=v,...}` fallback
+- [x] Unit formatting (`percent`, `s`, `/min`, plain), copied helpers
+- [x] Sort and limit
+- [x] Folded panel summary (colour counts, worst row, ties, no thresholds, empty)
+- [x] Sparkline rendering (resample, flat, empty)
 
 ## Phase 4: Managed backend (`internal/managed`)
 

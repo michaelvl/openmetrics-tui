@@ -15,7 +15,11 @@ import (
 // headerHeight is the rows the header bar occupies. It never varies: the edit
 // hint, validation errors and the suggestion list all live outside it, so the
 // panel area is not resized between keystrokes.
-const headerHeight = 3
+const (
+	titleHeight  = 1 // the dashboard title, on a line by itself
+	boxHeight    = 3 // variable boxes and the status lines beside them
+	headerHeight = titleHeight + boxHeight
+)
 
 const (
 	maxBoxW = 26
@@ -79,7 +83,7 @@ func (m *Model) renderHeader() string {
 		}
 	}
 	statusW := m.width - boxesW - 2
-	status := []string{"", m.statusLine1(statusW), m.statusLine2()}
+	status := []string{"", "", ""}
 	if hidden > 0 {
 		status[0] = faintStyle.Render(fmt.Sprintf("+%d more variables (keys %s)", hidden, m.hiddenKeys(boxes)))
 	}
@@ -88,7 +92,8 @@ func (m *Model) renderHeader() string {
 			rows[r] += "  " + clip(status[r], statusW)
 		}
 	}
-	return strings.Join(rows, "\n")
+	title := dashTitleStyle.Render(textutil.TruncateToWidth(m.d.Title, m.width))
+	return title + "\n" + strings.Join(rows, "\n")
 }
 
 func (m *Model) hiddenKeys(boxes []boxPos) string {
@@ -144,7 +149,7 @@ func (m *Model) renderBox(b boxPos) string {
 		BorderTop(false).
 		BorderForeground(border).
 		Width(inner).
-		MaxHeight(headerHeight - 1).
+		MaxHeight(boxHeight - 1).
 		Render(value)
 	return top + "\n" + body
 }
@@ -171,77 +176,6 @@ func boxTop(name string, n, inner int, borderStyle, captionStyle lipgloss.Style)
 	return borderStyle.Render(b.TopLeft+b.Top+"┤ ") +
 		captionStyle.Render(caption) +
 		borderStyle.Render(" ├"+strings.Repeat(b.Top, fill)+b.TopRight)
-}
-
-// healthText is the managed child indicator, empty for an external backend.
-func (m *Model) healthText() string {
-	if m.backend == nil {
-		return ""
-	}
-	if m.restarting {
-		return warnStyle.Render("↻ restarting")
-	}
-	for _, st := range m.health {
-		if !st.Running {
-			return errStyle.Render("⚠ " + st.Name + " down")
-		}
-	}
-	if len(m.health) == 0 {
-		return faintStyle.Render("●")
-	}
-	return okStyle.Render("●") + " ok"
-}
-
-// statusLine1 is the dashboard title, backend mode, managed child health and
-// last successful refresh. Parts that do not fit width are dropped, health last
-// of all.
-func (m *Model) statusLine1(width int) string {
-	type part struct {
-		text string
-		prio int // higher survives longer
-	}
-	parts := []part{{titleStyle.Render(m.d.Title), 3}}
-	if m.mode != "" {
-		parts = append(parts, part{modeStyle.Render(m.mode), 2})
-	}
-	if h := m.healthText(); h != "" {
-		parts = append(parts, part{h, 4})
-	}
-	if !m.lastOK.IsZero() {
-		parts = append(parts, part{faintStyle.Render("last ok " + m.lastOK.Format("15:04:05")), 1})
-	}
-	join := func() string {
-		texts := make([]string, len(parts))
-		for i, p := range parts {
-			texts[i] = p.text
-		}
-		return strings.Join(texts, "  ")
-	}
-	for len(parts) > 1 && lipgloss.Width(join()) > width {
-		lowest := 0
-		for i, p := range parts {
-			if p.prio < parts[lowest].prio {
-				lowest = i
-			}
-		}
-		parts = append(parts[:lowest], parts[lowest+1:]...)
-	}
-	return join()
-}
-
-func (m *Model) statusLine2() string {
-	if m.edit.kind == editVar {
-		return fmt.Sprintf("editing $%s", m.d.Variables[m.edit.v].Name)
-	}
-	labels := []string{}
-	for _, wi := range m.shownWindows {
-		labels = append(labels, m.d.Windows[wi].Label)
-	}
-	s := faintStyle.Render("windows ") + strings.Join(labels, " ") + "  ⟳ " + formatInterval(m.interval) + " (+/-)"
-	if m.paused {
-		s += "  " + warnStyle.Render("⏸ paused")
-	}
-	return s
 }
 
 // formatInterval renders a refresh interval compactly: 500ms, 10s, 2m.

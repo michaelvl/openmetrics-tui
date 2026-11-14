@@ -35,16 +35,17 @@ const (
 	colRed    = "#f7768e"
 	colYellow = "#e0af68"
 	colGreen  = "#9ece6a"
+	colTitle  = "#7aa2f7" // Tokyo Night blue, for the dashboard title
 )
 
 var (
-	faintStyle  = lipgloss.NewStyle().Faint(true)
-	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(colRed))
-	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colYellow))
-	okStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colGreen))
-	accentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
-	titleStyle  = lipgloss.NewStyle().Bold(true)
-	modeStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
+	faintStyle     = lipgloss.NewStyle().Faint(true)
+	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color(colRed))
+	warnStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colYellow))
+	okStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color(colGreen))
+	accentStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
+	titleStyle     = lipgloss.NewStyle().Bold(true)
+	dashTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colTitle))
 )
 
 // colorStyle maps a threshold colour name to a style. Names outside the usual

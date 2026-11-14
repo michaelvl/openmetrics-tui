@@ -603,7 +603,7 @@ func TestOverlayShowsEightRowsWithHighlightScrolled(t *testing.T) {
 	}
 }
 
-func TestOverlayKeepsHeaderThreeRows(t *testing.T) {
+func TestOverlayKeepsHeaderHeight(t *testing.T) {
 	m := varModel(t, &fakeQuerier{labelValues: nsValues})
 	before := strings.Split(m.View(), "\n")
 	press(m, "1")
@@ -613,8 +613,8 @@ func TestOverlayKeepsHeaderThreeRows(t *testing.T) {
 	}
 	golden(t, "overlay_100", m.View())
 	// The overlay sits in the panel area, under the box, not in the header.
-	if !strings.HasPrefix(after[3], "╭") {
-		t.Errorf("row 3 should start the overlay: %q", after[3])
+	if !strings.HasPrefix(after[4], "╭") {
+		t.Errorf("row 4 should start the overlay: %q", after[4])
 	}
 }
 
@@ -632,8 +632,8 @@ func managedModel(t *testing.T) (*Model, *fakeBackend) {
 
 func TestManagedStatusAndHealth(t *testing.T) {
 	m, b := managedModel(t)
-	if v := m.View(); !strings.Contains(v, "managed ctx=dev") || !strings.Contains(v, "● ok") {
-		t.Errorf("status line:\n%s", v)
+	if v := m.View(); !strings.HasPrefix(v, m.d.Title) || !strings.Contains(v, "● ok") {
+		t.Errorf("title or footer status missing:\n%s", v)
 	}
 	if f := m.renderFooter(""); !strings.Contains(f, "Log (L)") || strings.Contains(f, "Restart (R)") {
 		t.Errorf("footer: %q", f)
@@ -643,7 +643,7 @@ func TestManagedStatusAndHealth(t *testing.T) {
 	m.Update(eventMsg{ev: managed.Event{Child: "victoria-metrics"}})
 	settle(m, m.healthCmd())
 	v := m.View()
-	for _, want := range []string{"⚠ victoria-metrics down", "⚠ victoria-metrics exited: exit status 2", "R restart, L logs", "vm: scraping 3 targets"} {
+	for _, want := range []string{"⚠ backend down", "⚠ victoria-metrics exited: exit status 2", "R restart, L logs", "vm: scraping 3 targets"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view lacks %q:\n%s", want, v)
 		}

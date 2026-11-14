@@ -1,6 +1,7 @@
+Controller health
 ╭─┤ $namespace (1) ├─────╮╭─┤ $controller (2) ├────╮
-│prod                    ││.*                      │  Controller health  managed ctx=dev  ● ok
-╰────────────────────────╯╰────────────────────────╯  windows now 5m 15m 1h  ⟳ 10s (+/-)
+│prod                    ││.*                      │
+╰────────────────────────╯╰────────────────────────╯
  Backend log, 32 lines  ↑↓ scroll  L/Esc close
  vm: started
  vm: scraping 3 targets
@@ -34,7 +35,6 @@
  line b
  line c
  line d
-
 
 
 ? for help | ⟳ 10s (+/-) | Fold (space) | Sort (s): panel | Filter (/) | Log (L) | ● ok

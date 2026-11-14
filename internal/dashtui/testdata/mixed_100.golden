@@ -1,6 +1,7 @@
+Controller health
 ╭─┤ $namespace (1) ├─────╮╭─┤ $controller (2) ├────╮
-│prod                    ││.*                      │  Controller health  external http://prom:9090
-╰────────────────────────╯╰────────────────────────╯  windows now 5m 15m 1h  ⟳ 10s (+/-)
+│prod                    ││.*                      │
+╰────────────────────────╯╰────────────────────────╯
  ──────────────────────────────────────────────────────────────────────────────────────────────────
 ▌▾ Reconciles per minute (/min)                                                       ●>5  ●>1  ●≤1
                         now     5m      15m     1h       trend (1h)
@@ -11,7 +12,6 @@
  ▸ Error ratio                   ●1 ●1 ●1   worst: database-controller 9.1%
  ▸ Workqueue depth, top 8        ●1 ●1   worst: gadget 143
  ▸ API p99 latency (s)           ● 0.21
-
 
 
 

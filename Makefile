@@ -26,6 +26,3 @@ clean:
 
 run: build
 	./$(BINARY_NAME)
-
-screenshot: build mock-server
-	vhs docs/screenshot.tape

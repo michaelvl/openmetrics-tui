@@ -4,5 +4,6 @@
     "gnumake@4.4.1",
     "go@1.24.3",
     "golangci-lint@2.1.6",
+    "victoriametrics@1.156.0"
   ]
 }

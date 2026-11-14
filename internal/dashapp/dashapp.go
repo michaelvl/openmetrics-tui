@@ -140,7 +140,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	opts := dashtui.Options{Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode}
+	opts := dashtui.Options{Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode, URL: be.url}
 	if be.managed != nil {
 		opts.Backend = be.managed
 		opts.KubeContext = be.managed.KubeContext()
@@ -157,6 +157,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 type backend struct {
 	q       promapi.Querier
 	mode    string
+	url     string // external backend only
 	managed *managed.Backend
 	close   func()
 }
@@ -176,7 +177,7 @@ func newBackend(ctx context.Context, cfg *config, d *dashboard.Dashboard, stderr
 		if err != nil {
 			return nil, err
 		}
-		return &backend{q: q, mode: "external " + url, close: func() {}}, nil
+		return &backend{q: q, mode: "external " + url, url: url, close: func() {}}, nil
 	}
 	mopts := cfg.mopts
 	mopts.Scrape = d.Scrape

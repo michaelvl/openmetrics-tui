@@ -289,12 +289,12 @@ func (m *Model) buildLines() (lines []string, titleLine []int, cursorLine int) {
 	}
 	tw = min(tw, max(10, m.width/2))
 
-	headW, countsW := m.foldedWidths()
+	countsW := m.foldedWidth()
 	for i, p := range m.panels {
 		active := i == m.active
 		titleLine = append(titleLine, len(lines))
 		if p.folded {
-			lines = append(lines, m.foldedLine(p, active, tw, headW, countsW))
+			lines = append(lines, m.foldedLine(p, active, tw, countsW))
 			continue
 		}
 		lines = append(lines, m.titleRow(p, active))
@@ -428,41 +428,38 @@ func (m *Model) rowLine(p *panelState, r panel.Row, g grid, active, cursor bool)
 	return b
 }
 
-// foldedWidths are the widest head and counts columns over the folded panels.
-func (m *Model) foldedWidths() (headW, countsW int) {
+// foldedWidth is the widest counts column over the folded panels.
+func (m *Model) foldedWidth() (countsW int) {
 	for _, p := range m.panels {
 		if !p.folded {
 			continue
 		}
 		if f := m.foldedSummary(p); f.counted {
-			headW = max(headW, lipgloss.Width(f.head))
 			countsW = max(countsW, lipgloss.Width(f.counts))
 		}
 	}
-	return headW, countsW
+	return countsW
 }
 
-// foldedParts is a folded panel's summary in up to three columns, so that
-// panels can be aligned: the row total, the per-colour counts and the worst
-// row. Summaries that are not a count (a single value, an error, loading) are
-// all in head, with the other columns empty.
+// foldedParts is a folded panel's summary in two columns, so that panels can
+// be aligned: the per-colour counts and the worst row. Summaries that are not
+// a count (a single value, an error, loading) are all in head.
 type foldedParts struct {
 	head, counts, worst string
 	counted             bool
 }
 
-// foldedLine is the one-line form of a panel: title, row total, per-colour
-// row counts with their thresholds and the worst row, kept live by the
-// panel's continued querying. headW and countsW align the columns across
-// panels.
-func (m *Model) foldedLine(p *panelState, active bool, tw, headW, countsW int) string {
+// foldedLine is the one-line form of a panel: title, per-colour row counts
+// out of the row total with their thresholds, and the worst row, kept live by
+// the panel's continued querying. countsW aligns the columns across panels.
+func (m *Model) foldedLine(p *panelState, active bool, tw, countsW int) string {
 	title := textutil.TruncateToWidth(p.title(), tw)
 	left := activeCue(active) + "▸ " + styleTitle(padRight(title, tw), active)
 	f := m.foldedSummary(p)
 	if !f.counted {
 		return left + "  " + f.head
 	}
-	return left + "  " + padRight(f.head, headW) + "  " + padRight(f.counts, countsW) + f.worst
+	return left + "  " + padRight(f.counts, countsW) + f.worst
 }
 
 func (m *Model) foldedSummary(p *panelState) foldedParts {
@@ -490,18 +487,19 @@ func (m *Model) foldedSummary(p *panelState) foldedParts {
 	case len(s.Counts) == 0:
 		return foldedParts{head: fmt.Sprintf("%d rows", s.Rows)}
 	}
-	// A colour's label is its first rule's, which is the legend's.
+	// A colour's label is its first rule's, as in the legend. The catch-all
+	// has none: "else" says little here.
 	labels := map[string]string{}
 	for _, t := range p.def.Thresholds {
-		if _, ok := labels[t.Color]; !ok {
-			labels[t.Color] = p.thresholdLabel(t)
+		if _, ok := labels[t.Color]; !ok && t.Op != "" {
+			labels[t.Color] = " " + faintStyle.Render(p.thresholdLabel(t))
 		}
 	}
 	var out []string
 	for _, c := range s.Counts {
-		out = append(out, colorStyle(c.Color).Render("●")+fmt.Sprint(c.N)+" "+faintStyle.Render(labels[c.Color]))
+		out = append(out, colorStyle(c.Color).Render("●")+fmt.Sprintf("%d/%d", c.N, s.Rows)+labels[c.Color])
 	}
-	f := foldedParts{head: fmt.Sprintf("%d rows", s.Rows), counts: strings.Join(out, "  "), counted: true}
+	f := foldedParts{counts: strings.Join(out, "  "), counted: true}
 	if s.Worst >= 0 {
 		f.worst = "  worst: " + rows[s.Worst].Title + " " + colorStyle(s.WorstColor).Render(m.valueText(p, s.WorstValue))
 	}

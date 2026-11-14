@@ -38,6 +38,8 @@ type Options struct {
 	Mode string
 	// KubeContext is shown at the left of the footer in managed mode.
 	KubeContext string
+	// URL is the external Prometheus API, shown after the footer status.
+	URL string
 	// Backend is set in managed mode.
 	Backend Backend
 	// Ctx bounds the lifetime of every request; nil means Background.
@@ -116,6 +118,7 @@ type Model struct {
 	backend Backend
 	mode    string
 	kubeCtx string
+	url     string
 	now     func() time.Time
 	snapDir string
 	// tickFn schedules a tick; tests replace it so no timer runs.
@@ -210,6 +213,7 @@ func New(opts Options) *Model {
 		backend:  opts.Backend,
 		mode:     opts.Mode,
 		kubeCtx:  opts.KubeContext,
+		url:      opts.URL,
 		now:      now,
 		snapDir:  opts.SnapshotDir,
 		tickFn:   tea.Tick,

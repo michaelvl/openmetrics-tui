@@ -52,7 +52,14 @@ func (m *Model) renderFooter(scrollHints string) string {
 	if m.edit.kind != editNone {
 		return clip(m.editFooter(), m.width)
 	}
-	status := m.statusSegment() + scrollHints
+	status := m.statusSegment()
+	switch {
+	case m.kubeCtx != "":
+		status += footerSep + faintStyle.Render("kubectl context: "+m.kubeCtx)
+	case m.url != "":
+		status += footerSep + faintStyle.Render(m.url)
+	}
+	status += scrollHints
 
 	left := "? for help"
 	if m.snapshotMsg != "" {
@@ -61,9 +68,6 @@ func (m *Model) renderFooter(scrollHints string) string {
 			style = errStyle
 		}
 		left = style.Render(textutil.TruncateToWidth(m.snapshotMsg, max(12, m.width/2)))
-	}
-	if m.kubeCtx != "" {
-		left = faintStyle.Render("kubectl context: "+m.kubeCtx) + footerSep + left
 	}
 	segs := []string{left, "⟳ " + formatInterval(m.interval) + " (+/-)"}
 	if m.paused {

@@ -1,17 +1,25 @@
 # omtui (openmetrics-tui)
 
-A terminal-based tool to monitor OpenMetrics/Prometheus metrics in real-time. A
-simple alternative to `watch 'curl http://... | grep metric_*`' workflows.
+Terminal tools for watching Prometheus/OpenMetrics metrics, with no server to
+install.
 
-This repository ships two commands:
+**`omtui-dash`**: a PromQL dashboard in your terminal. Per-series tables across
+time windows (`now`, `5m`, `1h`), sparklines and threshold colours show what is
+unhealthy right now, and whether it was a minute ago. Works against any
+Prometheus-compatible API, or in _managed mode_ scrapes the pods of your current
+Kubernetes context for you.
 
-- `omtui`: the live viewer for a single `/metrics` endpoint, described below.
-- `omtui-dash`: a terminal dashboard for PromQL queries, with an optional
-  managed mode for Kubernetes. See [omtui-dash](#omtui-dash-promql-dashboard).
+![Screenshot-dashboard](docs/dashboard.png)
 
-Metrics view:
+**`omtui`**: a live viewer for a single `/metrics` endpoint, a better
+`watch 'curl http://... | grep metric_*'`.
 
 ![Screenshot-metrics](docs/screen1.png)
+
+Jump to: [install omtui](#installation) · [install omtui-dash](#installing-omtui-dash) ·
+[omtui-dash quick start](#quick-start) (no cluster needed)
+
+# omtui: live metrics viewer
 
 Distributions view:
 
@@ -246,8 +254,6 @@ PromQL query shown as a table of series with several time-window columns
 (`now`, `5m`, `15m`, ...), a sparkline and threshold colours, so you can see at
 a glance which controller, pod or queue is unhealthy right now and whether it
 was a minute ago.
-
-![Screenshot-dashboard](docs/dashboard.png)
 
 It reads from any Prometheus-compatible HTTP API (Prometheus, VictoriaMetrics,
 Thanos, Mimir, ...). Alternatively, in _managed mode_ it starts its own

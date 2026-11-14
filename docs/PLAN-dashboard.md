@@ -351,7 +351,7 @@ Tests:
 
 See Appendix C for the layout reference.
 
-- Bubbletea model: panels, per-panel row cursor, active panel, window set,
+- Bubbletea model: panels, active panel, window set,
   last-refresh status, per-panel error state.
 - Refresh loop: one goroutine-safe command per panel per tick, partial failures
   shown on the panel without blanking the others. Back-off on repeated errors.

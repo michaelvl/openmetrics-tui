@@ -7,12 +7,16 @@ import (
 
 var blocks = []rune("▁▂▃▄▅▆▇█")
 
+// Missing marks a sparkline cell without data. It sits on the baseline, as
+// the lowest block does, so it reads as empty rather than as a value.
+const Missing = '.'
+
 // Sparkline renders values as exactly n block characters. Values are
 // resampled to n cells (cells covering several values average them; with
 // fewer values than cells each value is stretched), then scaled between the
 // minimum and maximum of the data. NaN and infinite values and cells without
-// data are blank. A flat series (all values equal) is the lowest block, and an
-// empty or all-NaN series is n blanks, so columns stay aligned.
+// data are Missing. A flat series (all values equal) is the lowest block, and
+// an empty or all-NaN series is n Missing cells, so columns stay aligned.
 func Sparkline(values []float64, n int) string {
 	if n <= 0 {
 		return ""
@@ -28,7 +32,7 @@ func Sparkline(values []float64, n int) string {
 	for _, v := range cells {
 		switch {
 		case math.IsNaN(v):
-			b.WriteRune(' ')
+			b.WriteRune(Missing)
 		case hi == lo:
 			b.WriteRune(blocks[0])
 		default:

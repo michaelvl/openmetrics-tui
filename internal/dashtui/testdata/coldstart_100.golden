@@ -5,7 +5,7 @@ Controller health
  ──────────────────────────────────────────────────────────────────────────────────────────────────
 ▌▾ Reconciles per minute (/min)                              collecting data (3 min)  ▲>5  ■>1  ●≤1
                       now     5m      15m     1h       trend (1h)
- ▌ widget-controller  0.4●    ·       ·       ·                   ▁
+ │ widget-controller  0.4●    ·       ·       ·        ...........▁
  ──────────────────────────────────────────────────────────────────────────────────────────────────
  ▾ Error ratio                                                                    ▲>5%  ■>1%  ●else
    no data (not scraped?)

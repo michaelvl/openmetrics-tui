@@ -257,29 +257,23 @@ func (m *Model) rebuild() {
 				p.shown[i].Title = "(single series)" // a query with no labels
 			}
 		}
-		p.cursor = max(0, min(p.cursor, len(p.shown)-1))
 	}
-	m.lines, m.titleLine, m.cursorLine = m.buildLines()
+	m.lines, m.titleLine = m.buildLines()
 
 	h := m.bodyHeight()
 	if m.follow && len(m.titleLine) > 0 {
-		top := m.titleLine[m.active]
-		bottom := top
-		if m.cursorLine >= 0 {
-			bottom = m.cursorLine
-		}
+		top, bottom := m.titleLine[m.active], m.panelEnd(m.active)
 		if bottom-top+1 <= h {
 			m.scroll = max(min(m.scroll, top), bottom-h+1)
 		} else {
-			m.scroll = max(min(m.scroll, bottom), bottom-h+1)
+			m.scroll = top // too tall: start at its title, up/down scroll on
 		}
 	}
 	m.follow = false
 	m.scroll = max(0, min(m.scroll, len(m.lines)-h))
 }
 
-func (m *Model) buildLines() (lines []string, titleLine []int, cursorLine int) {
-	cursorLine = -1
+func (m *Model) buildLines() (lines []string, titleLine []int) {
 	g := m.computeGrid()
 	m.shownWindows = g.cols
 	rule := faintStyle.Render(" " + strings.Repeat("─", max(0, m.width-2)))
@@ -311,11 +305,8 @@ func (m *Model) buildLines() (lines []string, titleLine []int, cursorLine int) {
 			lines = append(lines, "   "+faintStyle.Render("no rows match the filter"))
 		default:
 			lines = append(lines, m.columnHeader(g))
-			for ri, r := range p.shown {
-				if active && ri == p.cursor {
-					cursorLine = len(lines)
-				}
-				lines = append(lines, m.rowLine(p, r, g, active, ri == p.cursor))
+			for _, r := range p.shown {
+				lines = append(lines, m.rowLine(p, r, g, active))
 			}
 		}
 		lines = append(lines, rule)
@@ -323,7 +314,7 @@ func (m *Model) buildLines() (lines []string, titleLine []int, cursorLine int) {
 	for i, l := range lines {
 		lines[i] = clip(l, m.width)
 	}
-	return lines, titleLine, cursorLine
+	return lines, titleLine
 }
 
 // clip cuts a styled line to width cells.
@@ -399,18 +390,12 @@ func (m *Model) columnHeader(g grid) string {
 	return faintStyle.Render(b.String())
 }
 
-func (m *Model) rowLine(p *panelState, r panel.Row, g grid, active, cursor bool) string {
+func (m *Model) rowLine(p *panelState, r panel.Row, g grid, active bool) string {
 	gutter := " "
 	if active {
 		gutter = faintStyle.Render("│")
-		if cursor {
-			gutter = accentStyle.Render("▌")
-		}
 	}
 	label := padRight(textutil.TruncateToWidth(r.Title, g.labelW), g.labelW)
-	if cursor && active {
-		label = titleStyle.Render(label)
-	}
 	b := " " + gutter + " " + label
 	for k, wi := range g.cols {
 		c := m.cellFor(p, r.Cells[wi])
@@ -422,12 +407,44 @@ func (m *Model) rowLine(p *panelState, r panel.Row, g grid, active, cursor bool)
 	}
 	if g.trend > 0 {
 		spark := panel.Sparkline(r.Spark, g.trend)
+		style := lipgloss.NewStyle()
 		if nowColor := panel.Color(p.def.Thresholds, r.Now(m.d.Windows)); nowColor != "" {
-			spark = colorStyle(nowColor).Render(spark)
+			style = colorStyle(nowColor)
 		}
-		b += strings.Repeat(" ", colSep+1) + spark
+		b += strings.Repeat(" ", colSep+1) + renderSpark(spark, style)
 	}
 	return b
+}
+
+// renderSpark styles the data cells of a sparkline and fades the runs of
+// missing cells, so the dots do not read as data.
+func renderSpark(spark string, data lipgloss.Style) string {
+	var b strings.Builder
+	for _, run := range splitRuns(spark, panel.Missing) {
+		if strings.ContainsRune(run, panel.Missing) {
+			b.WriteString(faintStyle.Render(run))
+		} else {
+			b.WriteString(data.Render(run))
+		}
+	}
+	return b.String()
+}
+
+// splitRuns cuts s into maximal runs that are all sep or all not sep.
+func splitRuns(s string, sep rune) []string {
+	var runs []string
+	var cur []rune
+	for _, r := range s {
+		if len(cur) > 0 && (cur[0] == sep) != (r == sep) {
+			runs = append(runs, string(cur))
+			cur = cur[:0]
+		}
+		cur = append(cur, r)
+	}
+	if len(cur) > 0 {
+		runs = append(runs, string(cur))
+	}
+	return runs
 }
 
 // foldedWidth is the widest counts column over the folded panels.

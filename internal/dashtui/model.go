@@ -71,7 +71,6 @@ const (
 type panelState struct {
 	def    dashboard.Panel
 	folded bool
-	cursor int
 
 	// loaded is set once the first response (or error) arrived for the
 	// current variable values.
@@ -170,9 +169,8 @@ type Model struct {
 	lines        []string
 	shownWindows []int // window columns the grid still has room for
 	titleLine    []int
-	cursorLine   int // line of the active cursor row, or -1
 	scroll       int
-	follow       bool // scroll to keep the active panel and cursor visible
+	follow       bool // scroll to keep the active panel visible
 	bannerLines  []string
 }
 

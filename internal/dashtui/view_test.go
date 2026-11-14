@@ -176,10 +176,35 @@ func TestViewScrollsOnShortTerminal(t *testing.T) {
 	}
 	checkShape(t, m)
 
-	m = demoModel(t, 100, 8)
-	press(m, "down", "down")
-	if !strings.Contains(m.View(), "▌ database-controller") {
-		t.Errorf("cursor row scrolled out of view:\n%s", m.View())
+	checkShape(t, m)
+}
+
+// A panel taller than the panel area is scrolled through by up/down before the
+// keys move on to the next panel, and back up again in reverse.
+func TestUpDownScrollsTallPanelFirst(t *testing.T) {
+	m := demoModel(t, 100, 8)
+	if !m.tall(0) {
+		t.Fatalf("panel 0 should be taller than the %d-line panel area", m.bodyHeight())
+	}
+	start := m.scroll
+	press(m, "down")
+	if m.active != 0 || m.scroll != start+1 {
+		t.Fatalf("first down: active = %d, scroll = %d; want it to scroll from %d", m.active, m.scroll, start)
+	}
+	last := m.View()
+	for i := 0; i < 10 && m.active == 0; i++ {
+		last = m.View() // the view before the key that leaves the panel
+		press(m, "down")
+	}
+	if m.active != 1 {
+		t.Fatalf("down never left panel 0 (scroll = %d)", m.scroll)
+	}
+	if !strings.Contains(last, "database-controller") {
+		t.Errorf("left panel 0 before its last row was shown:\n%s", last)
+	}
+	press(m, "up")
+	if m.active != 0 {
+		t.Errorf("up from the top of panel 1: active = %d", m.active)
 	}
 	checkShape(t, m)
 }

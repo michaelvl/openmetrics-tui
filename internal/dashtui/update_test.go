@@ -315,12 +315,16 @@ func TestKeysMoveActivePanelAndFold(t *testing.T) {
 		t.Errorf("tab wraps: active = %d", m.active)
 	}
 	press(m, "down", "down", "down", "down")
-	if m.panels[0].cursor != 2 {
-		t.Errorf("cursor = %d, want clamped to 2", m.panels[0].cursor)
+	if m.active != 3 {
+		t.Errorf("down: active = %d, want clamped to 3", m.active)
 	}
 	press(m, "up")
-	if m.panels[0].cursor != 1 {
-		t.Errorf("cursor = %d", m.panels[0].cursor)
+	if m.active != 2 {
+		t.Errorf("up: active = %d", m.active)
+	}
+	press(m, "up", "up", "up")
+	if m.active != 0 {
+		t.Errorf("up: active = %d, want clamped to 0", m.active)
 	}
 	press(m, " ")
 	if !m.panels[0].folded {

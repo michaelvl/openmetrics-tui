@@ -106,7 +106,7 @@ Help
   1-9         Edit variable $n (Enter apply, Esc cancel, Tab next box)
               Typing filters the suggestions; up/down select, Tab/Enter accept
   tab         Next panel (shift+tab: previous)
-  up/down     Move the row cursor (on a folded panel: change panel)
+  up/down     Previous/next panel (scrolls a panel taller than the screen first)
   space/enter Fold or unfold the active panel
   z           Fold all panels, or unfold all when all are folded
   s           Cycle sort: panel setting, now descending, now ascending, label

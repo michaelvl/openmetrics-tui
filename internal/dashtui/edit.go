@@ -294,9 +294,6 @@ func (m *Model) handleFilterKey(msg tea.KeyMsg) tea.Cmd {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	m.rowFilter = m.input.Value() // live: rows narrow as the user types
-	for _, p := range m.panels {
-		p.cursor = 0
-	}
 	return cmd
 }
 

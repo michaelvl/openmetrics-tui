@@ -55,9 +55,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.follow = true
 		}
 	case "up", "k":
-		m.moveCursor(-1)
+		m.movePanel(-1)
 	case "down", "j":
-		m.moveCursor(1)
+		m.movePanel(1)
 	case " ", "enter":
 		if p := m.activePanel(); p != nil {
 			p.folded = !p.folded
@@ -129,21 +129,48 @@ func (m *Model) activePanel() *panelState {
 	return m.panels[m.active]
 }
 
-// moveCursor moves the row cursor of the active panel. On a folded panel there
-// are no rows, so the keys move between panels instead.
-func (m *Model) moveCursor(delta int) {
-	p := m.activePanel()
-	if p == nil {
+// panelEnd is the last line of panel i, its closing rule included.
+func (m *Model) panelEnd(i int) int {
+	if i+1 < len(m.titleLine) {
+		return m.titleLine[i+1] - 1
+	}
+	return len(m.lines) - 1
+}
+
+// tall reports whether panel i is too tall to show in the panel area at once.
+func (m *Model) tall(i int) bool {
+	return m.panelEnd(i)-m.titleLine[i]+1 > m.bodyHeight()
+}
+
+// movePanel handles up/down: it scrolls through a panel taller than the panel
+// area until its far edge is in view, then moves to the neighbouring panel.
+func (m *Model) movePanel(delta int) {
+	i := m.active
+	if i < 0 || i >= len(m.titleLine) {
+		return
+	}
+	h := m.bodyHeight()
+	if m.tall(i) {
+		if delta > 0 && m.panelEnd(i) >= m.scroll+h {
+			m.scroll++
+			return
+		}
+		if delta < 0 && m.titleLine[i] < m.scroll {
+			m.scroll--
+			return
+		}
+	}
+	next := i + delta
+	if next < 0 || next >= len(m.panels) {
+		return
+	}
+	m.active = next
+	if delta < 0 && m.tall(next) {
+		// Entering a tall panel from below starts at its bottom.
+		m.scroll = m.panelEnd(next) - h + 1
 		return
 	}
 	m.follow = true
-	if p.folded {
-		if next := m.active + delta; next >= 0 && next < len(m.panels) {
-			m.active = next
-		}
-		return
-	}
-	p.cursor = max(0, min(p.cursor+delta, len(p.shown)-1))
 }
 
 func (m *Model) handleLogKey(key string) {

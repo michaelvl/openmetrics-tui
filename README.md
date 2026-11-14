@@ -395,7 +395,7 @@ panels:
 | `datasource.url` | Backend URL when no flag chooses one. Must be a full URL. |
 | `refresh` | Refresh interval, a duration such as `10s` or `1m`. Default `10s`. |
 | `windows` | The value columns. See [Windows and `agg`](#windows-and-agg). |
-| `spark` | Range of the sparkline. Default `1h`. |
+| `spark` | Range of the sparkline. Default `1h`. Slots with no data are drawn as a faint `.`. |
 | `variables` | Editable query parameters, see [Variables](#variables). At most 9. |
 | `scrape` | Managed-mode scrape settings, see [Scrape section](#scrape-section). |
 | `panels` | Required, at least one. |
@@ -522,7 +522,7 @@ limits.
 | --- | --- |
 | `1` to `9` | Edit variable by number. `Enter` applies, `Esc` cancels, `Tab` / `Shift+Tab` applies and moves to the next or previous box. `Up` / `Down` choose a suggestion and `Tab` or `Enter` accepts it. |
 | `Tab` / `Shift+Tab` | Next / previous panel. |
-| `Up` `Down` / `k` `j` | Move the row cursor (between panels when the panel is folded). |
+| `Up` `Down` / `k` `j` | Previous/next panel. In a panel taller than the screen they scroll through it first. |
 | `Space` / `Enter` | Fold or unfold the active panel. |
 | `z` | Fold all panels, or unfold all if all are folded. |
 | `s` | Cycle sort: the panel's YAML order, `now` descending, `now` ascending, label. |

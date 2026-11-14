@@ -353,10 +353,10 @@ func TestSparkline(t *testing.T) {
 		{"flat", []float64{3, 3, 3, 3}, 4, "▁▁▁▁"},
 		{"flat zero", []float64{0, 0}, 3, "▁▁▁"},
 		{"single value", []float64{5}, 3, "▁▁▁"},
-		{"empty", nil, 4, "    "},
-		{"all nan", []float64{nan, nan}, 3, "   "},
-		{"gap", []float64{0, nan, 7}, 3, "▁ █"},
-		{"inf blank", []float64{0, math.Inf(1), 7}, 3, "▁ █"},
+		{"empty", nil, 4, "...."},
+		{"all nan", []float64{nan, nan}, 3, "..."},
+		{"gap", []float64{0, nan, 7}, 3, "▁.█"},
+		{"inf missing", []float64{0, math.Inf(1), 7}, 3, "▁.█"},
 		{"zero width", []float64{1, 2}, 0, ""},
 	} {
 		if got := Sparkline(c.in, c.n); got != c.want {

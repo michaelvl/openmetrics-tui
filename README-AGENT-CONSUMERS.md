@@ -339,7 +339,7 @@ Controller health                                  <- dashboard title
 ╰────────────────────────╯╰────────────────────────╯
 ▌▾ Reconciles per minute (/min)            ▲>5  ■>1  ●≤1   <- panel title + legend
                         now     5m      15m     1h       trend (1h)
- ▌ widget-controller    0.4●    0.417●  0.45●   0.6●     ██▇▆▆▅▄▃▃▂▁▁
+ │ widget-controller    0.4●    0.417●  0.45●   0.6●     ██▇▆▆▅▄▃▃▂▁▁
  │ gadget-controller    3.2■    3.01■   2.62■   0.9●     ▁▁▂▃▃▄▅▆▆▇██
 ? for help | ⟳ 10s (+/-) | Fold (space) | Sort (s): panel | Filter (/) | ● ok
 ```
@@ -348,9 +348,9 @@ Controller health                                  <- dashboard title
   query. As with `omtui`'s header boxes, they change what every row means but
   are not repeated on the rows.
 - **Panels** are stacked and separated by a rule. `▾` is an expanded panel, `▸` a
-  folded one. `▌` in the left margin marks the panel with focus, and on its
-  rows `▌` is the cursor row and `│` the others. These are navigation state,
-  not data.
+  folded one. `▌` on the title row marks the panel with focus, and `│` in the margin of
+  its rows marks them as the focused panel's. These are navigation state, not
+  data.
 - **Columns** are `now` followed by the configured windows (`5m`, `15m`, `1h`),
   each the value that long ago, or the aggregate over that trailing window when
   the panel uses `agg`. `trend (…)` is a sparkline of the series over the
@@ -391,6 +391,8 @@ shape; the legend order resolves it.
   sample the dashboard has collected (history is still being gathered). Neither
   is zero. A title showing `collecting data (3 min)` says how much history
   exists so far.
+- In the `trend` sparkline, a `.` is a slot with no data (history not collected
+  yet, or a missed scrape), not a low value. A low value is a block such as `▁`.
 - The sparkline takes the colour of the row's `now` threshold, so in a
   colourless export read status from the `now` cell's marker, not the trend.
 

@@ -83,7 +83,7 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 
 - [x] `cmd/mock-server`: `/api/v1/query_range`, `/api/v1/query` and `/api/v1/label/<label>/values` with synthetic data
 - [x] `examples/controllers.yaml` working against the mock (`make check-example`)
-- [x] `docs/dashboard.tape`, `docs/dashboard.gif`, `docs/dashboard.png` (`make demo`)
+- [x] `docs/dashboard.png`
 
 ## Phase 7: Documentation
 

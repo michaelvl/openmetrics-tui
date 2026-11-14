@@ -82,6 +82,7 @@ type Backend struct {
 	tmpDir      string // removed on Close
 	dataDir     string
 	warnings    []string
+	kubeContext string // guarded by mu
 	preflighted bool
 	events      chan Event
 
@@ -508,6 +509,7 @@ func (b *Backend) preflight(ctx context.Context) error {
 	if err := b.checkKubectl(ctx); err != nil {
 		return err
 	}
+	b.resolveKubeContext(ctx)
 	if err := b.checkVM(ctx); err != nil {
 		return err
 	}
@@ -578,6 +580,30 @@ func (b *Backend) checkVM(ctx context.Context) error {
 		b.warnings = append(b.warnings, w)
 	}
 	return nil
+}
+
+// resolveKubeContext records the context name kubectl will use: the
+// --kube-context flag, else the current context. Best effort: the name is only
+// shown to the user, so a failure leaves it empty.
+func (b *Backend) resolveKubeContext(ctx context.Context) {
+	name := b.opts.KubeContext
+	if name == "" {
+		out, err := b.runKubectl(ctx, "config", "current-context")
+		if err != nil {
+			return
+		}
+		name = strings.TrimSpace(out)
+	}
+	b.mu.Lock()
+	b.kubeContext = name
+	b.mu.Unlock()
+}
+
+// KubeContext is the kubectl context in use, or "" if it could not be determined.
+func (b *Backend) KubeContext() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.kubeContext
 }
 
 // runKubectl runs a kubectl command with the context flag and returns stdout.

@@ -3,9 +3,9 @@ Controller health
 │prod                    ││.*                      │
 ╰────────────────────────╯╰────────────────────────╯
  ──────────────────────────────────────────────────────────────────────────────────────────────────
-▌▸ Reconciles per minute (/min)  ●1 ●1 ●1   worst: database-controller 7.9
- ▸ Error ratio                   ●1 ●1 ●1   worst: database-controller 9.1%
- ▸ Workqueue depth, top 8        ●1 ●1   worst: gadget 143
+▌▸ Reconciles per minute (/min)  3 rows  ●1 >5  ●1 >1  ●1 ≤1      worst: database-controller 7.9
+ ▸ Error ratio                   3 rows  ●1 >5%  ●1 >1%  ●1 else  worst: database-controller 9.1%
+ ▸ Workqueue depth, top 8        2 rows  ●1 >100  ●1 else         worst: gadget 143
  ▸ API p99 latency (s)           ● 0.21
 
 

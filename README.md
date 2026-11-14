@@ -249,8 +249,6 @@ was a minute ago.
 
 ![Screenshot-dashboard](docs/dashboard.png)
 
-![Demo-dashboard](docs/dashboard.gif)
-
 It reads from any Prometheus-compatible HTTP API (Prometheus, VictoriaMetrics,
 Thanos, Mimir, ...). Alternatively, in _managed mode_ it starts its own
 short-lived backend that scrapes pods in your current Kubernetes context, so

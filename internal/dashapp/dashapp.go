@@ -143,6 +143,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	opts := dashtui.Options{Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode}
 	if be.managed != nil {
 		opts.Backend = be.managed
+		opts.KubeContext = be.managed.KubeContext()
 	}
 	if err := dashtui.Run(ctx, opts); err != nil && ctx.Err() == nil {
 		_, _ = fmt.Fprintf(stderr, "omtui-dash: %v\n", err)

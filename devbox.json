@@ -5,6 +5,7 @@
     "go@1.24.3",
     "golangci-lint@2.1.6",
     "kind@0.33.0",
+    "vhs@0.12.1",
     "victoriametrics@1.156.0"
   ]
 }

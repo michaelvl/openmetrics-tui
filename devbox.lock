@@ -231,6 +231,44 @@
         }
       }
     },
+    "vhs@0.12.1": {
+      "last_modified": "2026-11-12T14:50:34Z",
+      "resolved": "github:NixOS/nixpkgs/2074cc672349f14240fb7ea90d509e0b643e9dd4#vhs",
+      "source": "devbox-search",
+      "version": "0.12.1",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/fi5i5ami233z1cr1f54bvi7bhpqjyn0j-vhs-0.12.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/fi5i5ami233z1cr1f54bvi7bhpqjyn0j-vhs-0.12.1"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/9nnd0wbs5kqxim11dsryn3jh4fkkr434-vhs-0.12.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/9nnd0wbs5kqxim11dsryn3jh4fkkr434-vhs-0.12.1"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/fci0srlnyi36c0ijynvihdgii0nwqzxh-vhs-0.12.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/fci0srlnyi36c0ijynvihdgii0nwqzxh-vhs-0.12.1"
+        }
+      }
+    },
     "victoriametrics@1.156.0": {
       "last_modified": "2026-11-12T14:50:34Z",
       "resolved": "github:NixOS/nixpkgs/2074cc672349f14240fb7ea90d509e0b643e9dd4#victoriametrics",

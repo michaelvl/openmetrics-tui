@@ -404,7 +404,7 @@ See Appendix C for the layout reference.
   return synthetic matrices for a fixed set of queries, so the dashboard can be
   developed, tested and screenshotted without a cluster.
 - Example `examples/controllers.yaml` that works against the mock.
-- A `vhs` tape and screenshots in `docs/`, as for the existing tool.
+- Static screenshots in `docs/`.
 
 ## Phase 7: Documentation and local-cluster recipe
 

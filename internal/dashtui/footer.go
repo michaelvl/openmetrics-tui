@@ -62,6 +62,9 @@ func (m *Model) renderFooter(scrollHints string) string {
 		}
 		left = style.Render(textutil.TruncateToWidth(m.snapshotMsg, max(12, m.width/2)))
 	}
+	if m.kubeCtx != "" {
+		left = faintStyle.Render("kubectl context: "+m.kubeCtx) + footerSep + left
+	}
 	segs := []string{left, "⟳ " + formatInterval(m.interval) + " (+/-)"}
 	if m.paused {
 		segs = append(segs, warnStyle.Bold(true).Render("⏸ PAUSED (p)"))

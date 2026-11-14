@@ -36,6 +36,8 @@ type Options struct {
 	Querier promapi.Querier
 	// Mode is shown in the status line: "external <url>" or "managed <ctx>".
 	Mode string
+	// KubeContext is shown at the left of the footer in managed mode.
+	KubeContext string
 	// Backend is set in managed mode.
 	Backend Backend
 	// Ctx bounds the lifetime of every request; nil means Background.
@@ -113,6 +115,7 @@ type Model struct {
 	lv      promapi.LabelValuer
 	backend Backend
 	mode    string
+	kubeCtx string
 	now     func() time.Time
 	snapDir string
 	// tickFn schedules a tick; tests replace it so no timer runs.
@@ -206,6 +209,7 @@ func New(opts Options) *Model {
 		q:        opts.Querier,
 		backend:  opts.Backend,
 		mode:     opts.Mode,
+		kubeCtx:  opts.KubeContext,
 		now:      now,
 		snapDir:  opts.SnapshotDir,
 		tickFn:   tea.Tick,

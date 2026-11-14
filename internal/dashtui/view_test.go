@@ -78,7 +78,7 @@ func TestFoldedSummaryCountsAndWorst(t *testing.T) {
 	press(m, "z")
 	v := m.View()
 	for _, want := range []string{
-		"▸ Reconciles per minute (/min)", "●1 ●1 ●1   worst: database-controller 7.9",
+		"▸ Reconciles per minute (/min)", "3 rows  ●1 >5  ●1 >1  ●1 ≤1", "worst: database-controller 7.9",
 		"worst: gadget 143", "● 0.21",
 	} {
 		if !strings.Contains(v, want) {

@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/prometheus/common/model"
 
+	"github.com/michaelvl/openmetrics-tui/internal/dashboard"
 	"github.com/michaelvl/openmetrics-tui/internal/panel"
 	"github.com/michaelvl/openmetrics-tui/internal/textutil"
 )
@@ -189,24 +190,28 @@ func (p *panelState) title() string {
 	return t
 }
 
+// thresholdLabel is the comparison text of one rule: ">0.5", "≥3" or "else".
+func (p *panelState) thresholdLabel(t dashboard.Threshold) string {
+	v := panel.FormatValue(p.def.Unit, t.Value)
+	switch t.Op {
+	case "gt":
+		return ">" + v
+	case "gte":
+		return "≥" + v
+	case "lt":
+		return "<" + v
+	case "lte":
+		return "≤" + v
+	}
+	return "else"
+}
+
 // legend is the threshold legend for the title row: a coloured marker and the
 // comparison for each rule, in rule order (first match wins).
 func (p *panelState) legend() string {
 	var parts []string
 	for _, t := range p.def.Thresholds {
-		cmp := "else"
-		v := panel.FormatValue(p.def.Unit, t.Value)
-		switch t.Op {
-		case "gt":
-			cmp = ">" + v
-		case "gte":
-			cmp = "≥" + v
-		case "lt":
-			cmp = "<" + v
-		case "lte":
-			cmp = "≤" + v
-		}
-		parts = append(parts, colorStyle(t.Color).Render("●")+cmp)
+		parts = append(parts, colorStyle(t.Color).Render("●")+p.thresholdLabel(t))
 	}
 	return strings.Join(parts, "  ")
 }
@@ -284,11 +289,12 @@ func (m *Model) buildLines() (lines []string, titleLine []int, cursorLine int) {
 	}
 	tw = min(tw, max(10, m.width/2))
 
+	headW, countsW := m.foldedWidths()
 	for i, p := range m.panels {
 		active := i == m.active
 		titleLine = append(titleLine, len(lines))
 		if p.folded {
-			lines = append(lines, m.foldedLine(p, active, tw))
+			lines = append(lines, m.foldedLine(p, active, tw, headW, countsW))
 			continue
 		}
 		lines = append(lines, m.titleRow(p, active))
@@ -422,44 +428,84 @@ func (m *Model) rowLine(p *panelState, r panel.Row, g grid, active, cursor bool)
 	return b
 }
 
-// foldedLine is the one-line form of a panel: title, per-colour row counts
-// and the worst row, kept live by the panel's continued querying.
-func (m *Model) foldedLine(p *panelState, active bool, tw int) string {
-	title := textutil.TruncateToWidth(p.title(), tw)
-	left := activeCue(active) + "▸ " + styleTitle(padRight(title, tw), active)
-	return left + "  " + m.foldedSummary(p)
+// foldedWidths are the widest head and counts columns over the folded panels.
+func (m *Model) foldedWidths() (headW, countsW int) {
+	for _, p := range m.panels {
+		if !p.folded {
+			continue
+		}
+		if f := m.foldedSummary(p); f.counted {
+			headW = max(headW, lipgloss.Width(f.head))
+			countsW = max(countsW, lipgloss.Width(f.counts))
+		}
+	}
+	return headW, countsW
 }
 
-func (m *Model) foldedSummary(p *panelState) string {
+// foldedParts is a folded panel's summary in up to three columns, so that
+// panels can be aligned: the row total, the per-colour counts and the worst
+// row. Summaries that are not a count (a single value, an error, loading) are
+// all in head, with the other columns empty.
+type foldedParts struct {
+	head, counts, worst string
+	counted             bool
+}
+
+// foldedLine is the one-line form of a panel: title, row total, per-colour
+// row counts with their thresholds and the worst row, kept live by the
+// panel's continued querying. headW and countsW align the columns across
+// panels.
+func (m *Model) foldedLine(p *panelState, active bool, tw, headW, countsW int) string {
+	title := textutil.TruncateToWidth(p.title(), tw)
+	left := activeCue(active) + "▸ " + styleTitle(padRight(title, tw), active)
+	f := m.foldedSummary(p)
+	if !f.counted {
+		return left + "  " + f.head
+	}
+	return left + "  " + padRight(f.head, headW) + "  " + padRight(f.counts, countsW) + f.worst
+}
+
+func (m *Model) foldedSummary(p *panelState) foldedParts {
 	switch {
 	case p.err != nil:
-		return errStyle.Render(oneLine(p.err.Error(), max(10, m.width-lead-30)))
+		return foldedParts{head: errStyle.Render(oneLine(p.err.Error(), max(10, m.width-lead-30)))}
 	case !p.loaded:
-		return faintStyle.Render("loading…")
+		return foldedParts{head: faintStyle.Render("loading…")}
 	case len(p.rows) == 0:
-		return warnStyle.Render(noDataMsg)
+		return foldedParts{head: warnStyle.Render(noDataMsg)}
 	}
 	rows := panel.Arrange(p.rows, p.def, m.d.Windows, panel.SortYAML)
 	s := panel.Summarize(p.def, m.d.Windows, rows)
-	var out []string
 	switch {
 	case s.Single:
 		v := m.valueText(p, s.Value)
 		if c := panel.Color(p.def.Thresholds, s.Value); c != "" {
-			return colorStyle(c).Render("● " + v)
+			v = colorStyle(c).Render("● " + v)
 		}
-		return v
+		// The row's name: with one row it is the only hint what is measured.
+		if t := rows[0].Title; t != "" && t != "{}" {
+			v += "  " + faintStyle.Render(t)
+		}
+		return foldedParts{head: v}
 	case len(s.Counts) == 0:
-		return fmt.Sprintf("%d rows", s.Rows)
+		return foldedParts{head: fmt.Sprintf("%d rows", s.Rows)}
 	}
+	// A colour's label is its first rule's, which is the legend's.
+	labels := map[string]string{}
+	for _, t := range p.def.Thresholds {
+		if _, ok := labels[t.Color]; !ok {
+			labels[t.Color] = p.thresholdLabel(t)
+		}
+	}
+	var out []string
 	for _, c := range s.Counts {
-		out = append(out, colorStyle(c.Color).Render("●")+fmt.Sprint(c.N))
+		out = append(out, colorStyle(c.Color).Render("●")+fmt.Sprint(c.N)+" "+faintStyle.Render(labels[c.Color]))
 	}
-	line := strings.Join(out, " ")
+	f := foldedParts{head: fmt.Sprintf("%d rows", s.Rows), counts: strings.Join(out, "  "), counted: true}
 	if s.Worst >= 0 {
-		line += "   worst: " + rows[s.Worst].Title + " " + colorStyle(s.WorstColor).Render(m.valueText(p, s.WorstValue))
+		f.worst = "  worst: " + rows[s.Worst].Title + " " + colorStyle(s.WorstColor).Render(m.valueText(p, s.WorstValue))
 	}
-	return line
+	return f
 }
 
 func (m *Model) valueText(p *panelState, v float64) string {

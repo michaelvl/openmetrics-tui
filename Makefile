@@ -4,11 +4,13 @@ MOCK_PORT=8080
 DASH_BINARY_NAME=omtui-dash
 KIND_CLUSTER=omtui
 
-.PHONY: all build dash test lint fmt clean run run-dash check-example demo mock-server screenshot kind-up kind-down kind-dash
+.PHONY: all build tui dash test lint fmt clean run run-dash check-example mock-server screenshot kind-up kind-down kind-dash
 
-all: build dash mock-server
+all: build mock-server
 
-build:
+build: tui dash
+
+tui:
 	CGO_ENABLED=0 go build -o $(BINARY_NAME) ./cmd/omtui
 
 dash:
@@ -30,7 +32,7 @@ clean:
 	go clean
 	rm -f $(BINARY_NAME) $(DASH_BINARY_NAME) $(MOCK_BINARY_NAME)
 
-run: build
+run: tui
 	./$(BINARY_NAME)
 
 # Run the dashboard against the mock server's Prometheus API. The mock is
@@ -48,8 +50,8 @@ check-example: dash mock-server
 	sleep 1; \
 	./$(DASH_BINARY_NAME) --check --prom http://localhost:$(MOCK_PORT) examples/controllers.yaml
 
-# Re-record docs/dashboard.gif and docs/dashboard.png (needs vhs).
-demo: dash mock-server
+# Re-record docs/dashboard.png (needs vhs).
+screenshot: dash mock-server
 	./$(MOCK_BINARY_NAME) -port $(MOCK_PORT) >/dev/null & mock=$$!; \
 	trap 'kill $$mock' EXIT; \
 	sleep 1; \

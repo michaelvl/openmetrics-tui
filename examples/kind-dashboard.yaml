@@ -1,0 +1,62 @@
+# Dashboard for the kind demo cluster (make kind-up, make kind-dash).
+title: Kind demo
+datasource:
+  url: http://localhost:8428 # ignored by --managed
+refresh: 10s
+windows: [now, 5m, 15m, 1h]
+spark: 1h
+
+variables:
+  namespace:
+    default: demo
+    pattern: '^[a-z0-9-]+$'
+
+scrape:
+  namespaces: [demo]
+  interval: 15s
+  annotation: prometheus.io/scrape
+  port: prometheus.io/port
+  path: prometheus.io/path
+
+panels:
+  - title: Pod restarts (1h)
+    query: sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace="${namespace}"}[1h]))
+    label: "{{pod}}"
+    sort: desc
+    thresholds:
+      - { gt: 0, color: red }
+      - { color: green }
+
+  - title: Pods not ready
+    query: sum by (pod) (1 - kube_pod_status_ready{namespace="${namespace}", condition="true"})
+    label: "{{pod}}"
+    thresholds:
+      - { gt: 0, color: red }
+      - { color: green }
+
+  - title: Requests per second
+    query: sum by (pod) (rate(http_requests_total{namespace="${namespace}"}[2m]))
+    label: "{{pod}}"
+    thresholds:
+      - { gt: 5, color: yellow }
+      - { color: green }
+
+  - title: Request error ratio
+    query: |
+      sum by (pod) (rate(http_requests_total{namespace="${namespace}", status="500"}[2m]))
+      / sum by (pod) (rate(http_requests_total{namespace="${namespace}"}[2m]))
+    unit: percent
+    label: "{{pod}}"
+    thresholds:
+      - { gt: 0.5, color: red }
+      - { gt: 0.2, color: yellow }
+      - { color: green }
+
+  - title: Request p99 latency
+    query: histogram_quantile(0.99, sum by (le, pod) (rate(http_request_duration_seconds_bucket{namespace="${namespace}"}[2m])))
+    unit: s
+    label: "{{pod}}"
+    thresholds:
+      - { gt: 0.5, color: red }
+      - { gt: 0.1, color: yellow }
+      - { color: green }

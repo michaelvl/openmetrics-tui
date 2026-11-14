@@ -2,8 +2,9 @@ BINARY_NAME=omtui
 MOCK_BINARY_NAME=mock-server
 MOCK_PORT=8080
 DASH_BINARY_NAME=omtui-dash
+KIND_CLUSTER=omtui
 
-.PHONY: all build dash test lint fmt clean run run-dash check-example demo mock-server screenshot
+.PHONY: all build dash test lint fmt clean run run-dash check-example demo mock-server screenshot kind-up kind-down kind-dash
 
 all: build dash mock-server
 
@@ -53,3 +54,16 @@ demo: dash mock-server
 	trap 'kill $$mock' EXIT; \
 	sleep 1; \
 	vhs docs/dashboard.tape
+
+# Local test cluster with demo workloads (needs kind, docker or podman, and kubectl).
+kind-up:
+	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --name $(KIND_CLUSTER)
+	kubectl --context kind-$(KIND_CLUSTER) apply -f examples/kind/workloads.yaml
+	kubectl --context kind-$(KIND_CLUSTER) -n demo wait --for=condition=Available deployment --all --timeout=180s
+
+kind-down:
+	kind delete cluster --name $(KIND_CLUSTER)
+
+# Run the dashboard in managed mode against the kind cluster.
+kind-dash: dash
+	./$(DASH_BINARY_NAME) --managed --kube-context kind-$(KIND_CLUSTER) examples/kind-dashboard.yaml

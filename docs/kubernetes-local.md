@@ -252,3 +252,12 @@ variables behave as ordinary filters and panels can reach all of its history.
 
 `omtui-dash --check --prom ... my-dashboard.yaml` is a quick way to confirm that
 the dashboard's queries return data before opening the TUI.
+
+## Trying it on a throwaway kind cluster
+
+`make kind-up` creates a kind cluster named `omtui` and deploys demo workloads
+into the `demo` namespace (`examples/kind/workloads.yaml`): a web app with
+metrics, a load generator, a crash-looping pod and kube-state-metrics. Then
+`make kind-dash` runs `examples/kind-dashboard.yaml` in managed mode against it,
+and `make kind-down` deletes the cluster. It needs `kind`, a container runtime
+and `kubectl`.

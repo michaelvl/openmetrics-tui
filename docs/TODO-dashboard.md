@@ -6,7 +6,7 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 
 - [x] Create `cmd/omtui/main.go` as thin entry point calling `internal/app`
 - [x] Move model/Update/View/flags to `internal/app`
-- [ ] `git mv` independent files: `store`, `fetch`, `filter`, `histogram`, `header`
+- [x] `git mv` independent files: `store`, `fetch`, `filter`, `histogram` (`header` and the filter/histogram views stay in `internal/app`: they are coupled to `model`)
 - [x] Decide on `aggregate` (stays in `app` or small interface; it has `model` methods)
 - [x] Export only names that cross package boundaries
 - [x] Move tests with their files
@@ -71,7 +71,7 @@ Checklist derived from [PLAN-dashboard.md](PLAN-dashboard.md).
 - [x] Refresh loop per panel, partial failures, back-off, generation counter
 - [x] Layout with shared column grid, scrolling, narrow-width degradation
 - [x] Folding (per panel, `z` all, live summaries, error on folded line)
-- [x] Header bar with variable boxes (`1`-`9`), shared `textinput`, validation in footer (boxes that do not fit are hidden, the edited one takes the last slot, instead of a popup)
+- [x] Header bar with variable boxes (`1`-`9`), shared `textinput`, validation in footer (deviation from the plan: boxes that do not fit are hidden and the edited one takes the last slot, instead of overflowing into a popup)
 - [x] Suggestion overlay (substring filter, 8 rows, "N more", "k of n values", cached lookups)
 - [x] Keys: tab, up/down, space/enter, `s`, `/`, `r`, `p`, `+`/`-`, `?`, `q`, `L`, `R`
 - [x] Footer in `Name (key)` style; per-panel threshold legend

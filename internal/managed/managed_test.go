@@ -364,3 +364,21 @@ func TestInvalidRetentionFailsEarly(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 }
+
+func TestRestartAfterCloseStartsNothing(t *testing.T) {
+	b, err := Start(ctx(t), fakeOptions(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Restart(ctx(t)); err == nil {
+		t.Fatal("Restart after Close succeeded")
+	}
+	for _, h := range b.Health() {
+		if h.Running {
+			t.Errorf("%s running after Close and Restart", h.Name)
+		}
+	}
+}

@@ -58,8 +58,7 @@ internal/
   fetch/                     fetcher.go
   aggregate/                 aggregate.go
   filter/                    filter.go
-  histogram/                 histogram.go, histogram_view.go
-  header/                    header.go
+  histogram/                 histogram.go (the view, histogram_view.go, stays in app)
 docs/
 ```
 
@@ -75,7 +74,7 @@ Notes and decisions to make while doing it:
   `model` (`m.aggregateSeries`), so those either stay in `app` or get a small
   interface. Do not force a clean split where the code is genuinely entangled; a
   first pass that moves only the clearly independent files (`store`, `fetch`,
-  `filter`, `histogram`, `header`) and leaves model-coupled code in `app` is
+  `filter`, `histogram`) and leaves model-coupled code in `app` is
   acceptable.
 - Exported names: types currently lowercase and shared across files (`model`,
   `distEntry`, `cursorSpan`, ...) will need exporting only where they cross a
@@ -377,8 +376,9 @@ See Appendix C for the layout reference.
   still accepted if it passes `pattern`, with a "not in list" note. Values are
   fetched when the box opens and cached briefly. Applying a value re-queries all
   panels and cancels in-flight requests with a generation counter, as the
-  existing tool does for ticks. Boxes shrink to short captions on narrow
-  terminals and then overflow into a popup.
+  existing tool does for ticks. Boxes that do not fit on a narrow
+  terminal are hidden and the edited box takes the last slot (built this way
+  instead of the popup first planned).
 - Keys (mirroring the existing tool where it makes sense): `1` to `9` edit
   variables, tab or shift-tab for panels, up/down for rows, space or enter to
   fold or unfold the active panel, `z` to fold or unfold all, `s` to cycle

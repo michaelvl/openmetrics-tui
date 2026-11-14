@@ -300,7 +300,7 @@ func GenerateSignature(name string, labels map[string]string) string {
 		if i > 0 {
 			sb.WriteString(",")
 		}
-		sb.WriteString(fmt.Sprintf("%s=%q", k, labels[k]))
+		fmt.Fprintf(&sb, "%s=%q", k, labels[k])
 	}
 	sb.WriteString("}")
 	return sb.String()

@@ -1,0 +1,137 @@
+# Demo workloads for `make kind-up`. Everything lives in the demo namespace and
+# opts in to scraping with the prometheus.io/* annotations that
+# examples/kind-dashboard.yaml expects.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+# A small web app with a /metrics endpoint (http_requests_total, latency histogram).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podinfo
+  namespace: demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: podinfo}
+  template:
+    metadata:
+      labels: {app: podinfo}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9898"
+        prometheus.io/path: /metrics
+    spec:
+      containers:
+        - name: podinfo
+          image: ghcr.io/stefanprodan/podinfo:6.7.1
+          ports: [{containerPort: 9898}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: podinfo
+  namespace: demo
+spec:
+  selector: {app: podinfo}
+  ports: [{port: 9898}]
+---
+# Traffic so the request panels have something to show.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgen
+  namespace: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: loadgen}
+  template:
+    metadata:
+      labels: {app: loadgen}
+    spec:
+      containers:
+        - name: loadgen
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - |
+              while true; do
+                wget -q -O /dev/null http://podinfo:9898/
+                wget -q -O /dev/null http://podinfo:9898/status/500 || true
+                sleep 0.5
+              done
+---
+# Restarts forever, so the restart panel has a red row.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crashloop
+  namespace: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: crashloop}
+  template:
+    metadata:
+      labels: {app: crashloop}
+    spec:
+      containers:
+        - name: crashloop
+          image: busybox:1.37
+          command: [sh, -c, "sleep 45; exit 1"]
+---
+# kube-state-metrics: kube_pod_* series for the pod status panels.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-state-metrics
+  namespace: demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-state-metrics-demo
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-state-metrics-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-state-metrics-demo
+subjects:
+  - kind: ServiceAccount
+    name: kube-state-metrics
+    namespace: demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  namespace: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: kube-state-metrics}
+  template:
+    metadata:
+      labels: {app: kube-state-metrics}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: kube-state-metrics
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.14.0
+          args: [--resources=pods, --namespaces=demo]
+          ports: [{containerPort: 8080}]

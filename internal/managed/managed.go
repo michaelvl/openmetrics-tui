@@ -85,6 +85,10 @@ type Backend struct {
 	preflighted bool
 	events      chan Event
 
+	// life serialises Restart and Close, so a restart cannot start children
+	// after Close has stopped them.
+	life sync.Mutex
+
 	mu      sync.Mutex
 	proxy   *child
 	vm      *child
@@ -438,6 +442,14 @@ func (b *Backend) Logs() []string { return b.log.Lines() }
 // trying to keep the VictoriaMetrics address so the Querier stays valid. The
 // proxy port changes on every start, so both children restart together.
 func (b *Backend) Restart(ctx context.Context) error {
+	b.life.Lock()
+	defer b.life.Unlock()
+	b.mu.Lock()
+	closed := b.closed
+	b.mu.Unlock()
+	if closed {
+		return errors.New("backend is closed")
+	}
 	b.stopChildren()
 	b.mu.Lock()
 	b.exitErr = map[string]error{}
@@ -479,6 +491,8 @@ func (b *Backend) Close() error {
 	}
 	b.closed = true
 	b.mu.Unlock()
+	b.life.Lock() // waits for a restart in progress, whose children we then stop
+	defer b.life.Unlock()
 	b.stopChildren()
 	var err error
 	if b.tmpDir != "" {

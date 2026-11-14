@@ -33,7 +33,7 @@ viewer.
 | Embedding            | None. Talk REST (`/api/v1/query_range`, `/api/v1/query`).                                                                                               |
 | Backend modes        | External (`--prom URL`) or managed (`--managed`: child `kubectl proxy` + child VictoriaMetrics). Mutually exclusive; the TUI code only sees a `Querier`. |
 | Windows              | One `query_range` per panel; columns are picked from that response, instant value at `t-window` by default, optional `agg: avg\|max\|min`.              |
-| Thresholds           | Evaluated per cell, first match wins. A `●` marker accompanies the colour so it is not the only signal.                                                 |
+| Thresholds           | Evaluated per cell, first match wins. A marker accompanies the colour so it is not the only signal: `▲` red, `◆` orange, `■` yellow, `●` otherwise, or a one-column `symbol` set on the rule.                                                 |
 | `rate()` intervals   | Written explicitly in the query. No `$__interval` in v1.                                                                                                |
 | Shared helpers       | Copy the few formatting helpers at first; extract to `internal/ui` only once the overlap is proven.                                                     |
 | Local cluster access | Managed mode automates `kubectl proxy` plus a local VictoriaMetrics with a pod-proxy scrape config; the same recipe is documented for doing it by hand. No Kubernetes client code in our binaries. |

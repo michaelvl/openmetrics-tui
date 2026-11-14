@@ -6,21 +6,21 @@ Controller health
 ▌▾ Reconciles per minute (/min)
                         now     5m
  ▌ widget-controller    0.4●    0.417●
- │ gadget-controller    3.2●    3.01●
- │ database-controller  7.9●    7.76●
+ │ gadget-controller    3.2■    3.01■
+ │ database-controller  7.9▲    7.76▲
  ──────────────────────────────────────────
- ▾ Error ratio            ●>5%  ●>1%  ●else
+ ▾ Error ratio            ▲>5%  ■>1%  ●else
                         now     5m
    widget-controller    0%●     0%●
-   gadget-controller    1.4%●   1.29%●
-   database-controller  9.1%●   9.05%●
+   gadget-controller    1.4%■   1.29%■
+   database-controller  9.1%▲   9.05%▲
  ──────────────────────────────────────────
- ▾ Workqueue depth, top 8      ●>100  ●else
+ ▾ Workqueue depth, top 8      ▲>100  ●else
                         now     5m
-   gadget               143●    131●
+   gadget               143▲    131▲
    widget               2●      1.83●
  ──────────────────────────────────────────
- ▾ API p99 latency (s)           ●>1  ●else
+ ▾ API p99 latency (s)           ▲>1  ●else
                         now     5m
    (single series)      0.21●   0.211●
  ──────────────────────────────────────────

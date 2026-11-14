@@ -76,9 +76,27 @@ type Panel struct {
 
 // Threshold is one ordered rule; the first match wins.
 type Threshold struct {
-	Op    string // "gt", "gte", "lt", "lte", or "" for the catch-all
-	Value float64
-	Color string
+	Op     string // "gt", "gte", "lt", "lte", or "" for the catch-all
+	Value  float64
+	Color  string
+	Symbol string // marker drawn with the colour; "" for the colour's default
+}
+
+// Marker is the status symbol of the rule. The default has a distinct shape per
+// well-known colour, so the status reads without colour.
+func (t Threshold) Marker() string {
+	if t.Symbol != "" {
+		return t.Symbol
+	}
+	switch t.Color {
+	case "red":
+		return "▲"
+	case "orange":
+		return "◆"
+	case "yellow":
+		return "■"
+	}
+	return "●"
 }
 
 // Scrape configures managed mode scraping (Phase 4); it is only validated here.
@@ -182,11 +200,12 @@ type rawPanel struct {
 }
 
 type rawThreshold struct {
-	Gt    *float64 `yaml:"gt"`
-	Gte   *float64 `yaml:"gte"`
-	Lt    *float64 `yaml:"lt"`
-	Lte   *float64 `yaml:"lte"`
-	Color string   `yaml:"color"`
+	Gt     *float64 `yaml:"gt"`
+	Gte    *float64 `yaml:"gte"`
+	Lt     *float64 `yaml:"lt"`
+	Lte    *float64 `yaml:"lte"`
+	Color  string   `yaml:"color"`
+	Symbol string   `yaml:"symbol"`
 }
 
 var (

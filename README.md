@@ -434,6 +434,11 @@ thresholds:
 `grey`; any other value is passed to the terminal as a colour name or number
 (for example `"213"` or `"#ff8800"`).
 
+Each colour is drawn with a marker, so status still reads without colour. The
+default has a distinct shape per colour: `▲` red, `◆` orange, `■` yellow, `●`
+anything else. Set `symbol` on an entry to use another single, one-column-wide
+character, for example `{ gt: 5, color: red, symbol: "✗" }`.
+
 ### Windows and `agg`
 
 `windows` is one list of offsets, `now` first, each larger than the one before.

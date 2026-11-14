@@ -94,7 +94,7 @@ func TestDefaultsAndFull(t *testing.T) {
 	if p.Agg != "max" || p.Sort != "asc" || p.Limit != 3 || !p.Folded || p.Unit != "" {
 		t.Errorf("panel: %+v", p)
 	}
-	want := []Threshold{{"gte", 4, "red"}, {"lt", 1, "green"}, {"", 0, "yellow"}}
+	want := []Threshold{{Op: "gte", Value: 4, Color: "red", Symbol: "✗"}, {Op: "lt", Value: 1, Color: "green"}, {Color: "yellow"}}
 	for i, th := range p.Thresholds {
 		if th != want[i] {
 			t.Errorf("threshold %d: %+v", i, th)

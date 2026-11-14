@@ -90,8 +90,9 @@ func (g grid) width() int {
 
 // cell is a formatted window cell.
 type cell struct {
-	text  string
-	color string // threshold colour, "" for none
+	text   string
+	color  string // threshold colour, "" for none
+	symbol string // marker drawn after the text when coloured
 }
 
 // width includes the marker column that follows a coloured cell.
@@ -110,7 +111,8 @@ func (m *Model) cellFor(p *panelState, c panel.Cell) cell {
 	case math.IsNaN(c.V):
 		return cell{text: "-"}
 	}
-	return cell{text: panel.FormatValue(p.def.Unit, c.V), color: panel.Color(p.def.Thresholds, c.V)}
+	t, _ := panel.Match(p.def.Thresholds, c.V)
+	return cell{text: panel.FormatValue(p.def.Unit, c.V), color: t.Color, symbol: t.Marker()}
 }
 
 // computeGrid sizes the shared columns for width columns of terminal. Too wide
@@ -211,7 +213,7 @@ func (p *panelState) thresholdLabel(t dashboard.Threshold) string {
 func (p *panelState) legend() string {
 	var parts []string
 	for _, t := range p.def.Thresholds {
-		parts = append(parts, colorStyle(t.Color).Render("●")+p.thresholdLabel(t))
+		parts = append(parts, colorStyle(t.Color).Render(t.Marker())+p.thresholdLabel(t))
 	}
 	return strings.Join(parts, "  ")
 }
@@ -414,7 +416,7 @@ func (m *Model) rowLine(p *panelState, r panel.Row, g grid, active, cursor bool)
 		c := m.cellFor(p, r.Cells[wi])
 		txt, w := c.text, c.width()
 		if c.color != "" {
-			txt = colorStyle(c.color).Render(c.text + "●")
+			txt = colorStyle(c.color).Render(c.text + c.symbol)
 		}
 		b += strings.Repeat(" ", colSep) + txt + strings.Repeat(" ", max(0, g.colW[k]-w))
 	}
@@ -476,8 +478,8 @@ func (m *Model) foldedSummary(p *panelState) foldedParts {
 	switch {
 	case s.Single:
 		v := m.valueText(p, s.Value)
-		if c := panel.Color(p.def.Thresholds, s.Value); c != "" {
-			v = colorStyle(c).Render("● " + v)
+		if t, ok := panel.Match(p.def.Thresholds, s.Value); ok {
+			v = colorStyle(t.Color).Render(t.Marker() + " " + v)
 		}
 		// The row's name: with one row it is the only hint what is measured.
 		if t := rows[0].Title; t != "" && t != "{}" {
@@ -487,17 +489,20 @@ func (m *Model) foldedSummary(p *panelState) foldedParts {
 	case len(s.Counts) == 0:
 		return foldedParts{head: fmt.Sprintf("%d rows", s.Rows)}
 	}
-	// A colour's label is its first rule's, as in the legend. The catch-all
-	// has none: "else" says little here.
-	labels := map[string]string{}
+	// A colour's marker and label are its first rule's, as in the legend. The
+	// catch-all has no label: "else" says little here.
+	labels, markers := map[string]string{}, map[string]string{}
 	for _, t := range p.def.Thresholds {
+		if _, ok := markers[t.Color]; !ok {
+			markers[t.Color] = t.Marker()
+		}
 		if _, ok := labels[t.Color]; !ok && t.Op != "" {
 			labels[t.Color] = " " + faintStyle.Render(p.thresholdLabel(t))
 		}
 	}
 	var out []string
 	for _, c := range s.Counts {
-		out = append(out, colorStyle(c.Color).Render("●")+fmt.Sprintf("%d/%d", c.N, s.Rows)+labels[c.Color])
+		out = append(out, colorStyle(c.Color).Render(markers[c.Color])+fmt.Sprintf("%d/%d", c.N, s.Rows)+labels[c.Color])
 	}
 	f := foldedParts{counts: strings.Join(out, "  "), counted: true}
 	if s.Worst >= 0 {

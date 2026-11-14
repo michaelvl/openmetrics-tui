@@ -31,6 +31,6 @@ panels:
     limit: 3
     folded: true
     thresholds:
-      - { gte: 4, color: red }
+      - { gte: 4, color: red, symbol: "✗" }
       - { lt: 1, color: green }
       - { color: yellow }

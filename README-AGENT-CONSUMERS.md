@@ -1,5 +1,8 @@
 # Reading omtui as an agent
 
+> Handed a screen from `omtui-dash` (panels of PromQL with threshold markers)
+> instead of `omtui`? Skip to [Reading omtui-dash](#reading-omtui-dash-the-dashboard).
+
 This document is for an AI agent that is handed a screenshot (or pasted text)
 of an `omtui` screen and asked to explain or reason about it, without
 access to the running terminal, the command line it was started with, or the
@@ -318,6 +321,117 @@ screenshot:
 - **The `-history` flag's configured value** — only however many columns
   currently fit are visible; a narrower terminal or window silently shows
   fewer than what's configured, oldest columns first (see above).
+
+## Reading omtui-dash (the dashboard)
+
+`omtui-dash` is a separate binary that shows a YAML-defined dashboard of
+PromQL panels. Everything above about `omtui`'s Metrics and Distributions
+views, header boxes, deltas and the footer does **not** apply to it. Read this
+section instead. Its saved snapshot (`S`) is plain text like `omtui`'s, so the
+symbols below are what carry status when colour is gone.
+
+### Layout, top to bottom
+
+```
+Controller health                                  <- dashboard title
+╭─┤ $namespace (1) ├─────╮╭─┤ $controller (2) ├────╮
+│prod                    ││.*                      │    <- variable boxes
+╰────────────────────────╯╰────────────────────────╯
+▌▾ Reconciles per minute (/min)            ▲>5  ■>1  ●≤1   <- panel title + legend
+                        now     5m      15m     1h       trend (1h)
+ ▌ widget-controller    0.4●    0.417●  0.45●   0.6●     ██▇▆▆▅▄▃▃▂▁▁
+ │ gadget-controller    3.2■    3.01■   2.62■   0.9●     ▁▁▂▃▃▄▅▆▆▇██
+? for help | ⟳ 10s (+/-) | Fold (space) | Sort (s): panel | Filter (/) | ● ok
+```
+
+- **Variable boxes** hold the values substituted for `$name` in every panel's
+  query. As with `omtui`'s header boxes, they change what every row means but
+  are not repeated on the rows.
+- **Panels** are stacked and separated by a rule. `▾` is an expanded panel, `▸` a
+  folded one. `▌` in the left margin marks the panel with focus, and on its
+  rows `▌` is the cursor row and `│` the others. These are navigation state,
+  not data.
+- **Columns** are `now` followed by the configured windows (`5m`, `15m`, `1h`),
+  each the value that long ago, or the aggregate over that trailing window when
+  the panel uses `agg`. `trend (…)` is a sparkline of the series over the
+  longest window; it can be dropped, then the longest windows, on a narrow
+  terminal, so a missing column is not evidence of anything.
+- **Row titles** come from the panel's `label` template. A query that returns a series with no
+  labels shows `(single series)`.
+- A panel may be **sorted** and **limited** (the title says e.g. `top 8`); the
+  footer's `Sort (s): panel|label|now ↓|now ↑` applies to every panel.
+  A `/` filter narrows rows by title.
+
+### Threshold symbols
+
+Value cells are drawn with a marker after the number, and the panel's title row
+carries a **legend** of the rules in evaluation order (first match wins). The
+marker is the status; colour is only a second signal.
+
+| Marker | Default for | Reads as |
+|---|---|---|
+| `▲` | `red` | worst, critical |
+| `◆` | `orange` | warning, more severe than `■` |
+| `■` | `yellow` | warning |
+| `●` | `green` and any other colour | fine / informational |
+| any other single character | a rule with a `symbol:` set | whatever the legend says |
+
+The "reads as" column is the usual convention, not something the tool enforces:
+the dashboard author picks the colours and thresholds, so the legend decides.
+
+**Do not assume a marker's meaning; read the legend on the same panel's title
+row.** `▲>5  ■>1  ●≤1` means a cell is `▲` above 5, otherwise `■` above 1,
+otherwise `●` at or below 1. A last entry such as `●else` is the catch-all. The
+operators are `>`, `≥`, `<`, `≤`. Custom `symbol:` characters appear in both the
+legend and the cells, so the legend is always the key. Two rules may share a
+shape; the legend order resolves it.
+
+- A cell with **no marker** matched no rule or has no value, not "OK".
+- `-` is a missing value, and `·` means the window reaches back before the first
+  sample the dashboard has collected (history is still being gathered). Neither
+  is zero. A title showing `collecting data (3 min)` says how much history
+  exists so far.
+- The sparkline takes the colour of the row's `now` threshold, so in a
+  colourless export read status from the `now` cell's marker, not the trend.
+
+### Folded panels
+
+A folded panel (`▸`) is one line, and has one of three shapes:
+
+| Shape | Example | Meaning |
+|---|---|---|
+| Counts | `▲1/3 >5  ■1/3 >1  ●1/3 ≤1  worst: database-controller 7.9` | per marker, rows in that state out of all rows, using the first rule's symbol and label for each colour; `worst:` is the most severe row (red, then yellow, green, others), highest value on ties |
+| Single value | `● 0.21` | a one-series panel: its `now` value and marker |
+| Row count | `5 rows` | no thresholds defined |
+
+A marker missing from the counts means zero rows are in that state, but rows
+with no `now` value or no matching rule are not counted at all, so the counts
+can sum to less than the total.
+
+### Panel states and the footer
+
+| On screen | Meaning |
+|---|---|
+| `no data (not scraped?)` | the query returned no series; the target may not be scraped, the variables may match nothing, or the metric may not exist yet |
+| error text such as `bad_data: boom` in place of rows | that panel's query failed; other panels are unaffected |
+| `loading…` | the panel's first result has not arrived |
+
+The footer is `? for help | ⟳ <interval> (+/-) | Fold (space) | Sort (s): … |
+Filter (/)`, then optional segments, with the **health indicator at the right
+end**:
+
+| Right-end segment | Meaning |
+|---|---|
+| `● ok` | all panels loaded and none failing |
+| `● loading` | at least one panel has not loaded yet |
+| `⚠ N of M panels failing` | N panels' last query failed; the others are current |
+| `⚠ backend down` | in managed mode, the scraping/Prometheus backend is not running; panels show the last data and `Restart (R)` appears in the footer |
+
+After the status the footer may show the Prometheus URL or `kubectl context:
+<name>`. `⏸ PAUSED (p)` appears only while paused. Footer segments are dropped
+from the right on a narrow terminal, so a missing `Sort` or `Filter` hint is not
+a mode change. Note that `●` in this footer is the health indicator, unrelated
+to the `●` threshold marker.
 
 ## Practical checklist for interpreting a screenshot
 

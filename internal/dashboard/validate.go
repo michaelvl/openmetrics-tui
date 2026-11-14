@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 	"gopkg.in/yaml.v3"
 )
 
@@ -208,16 +210,19 @@ func (v *validator) thresholds(pn *yaml.Node, name string, raws []rawThreshold) 
 				ops = append(ops, Threshold{Op: c.op, Value: *c.v})
 			}
 		}
-		t := Threshold{Color: r.Color}
+		t := Threshold{Color: r.Color, Symbol: r.Symbol}
 		switch {
 		case len(ops) > 1:
 			v.errf(line, "%s: threshold %d has more than one comparison (use one of gt, gte, lt, lte)", name, i+1)
 		case len(ops) == 1:
 			t = ops[0]
-			t.Color = r.Color
+			t.Color, t.Symbol = r.Color, r.Symbol
 		}
 		if strings.TrimSpace(r.Color) == "" {
 			v.errf(line, "%s: threshold %d needs a color", name, i+1)
+		}
+		if r.Symbol != "" && (uniseg.GraphemeClusterCount(r.Symbol) != 1 || runewidth.StringWidth(r.Symbol) != 1) {
+			v.errf(line, "%s: threshold %d symbol %q must be a single character one column wide", name, i+1, r.Symbol)
 		}
 		if t.Op == "" && len(ops) == 0 && i != len(raws)-1 {
 			v.errf(line, "%s: catch-all threshold %d must be last; later entries can never match", name, i+1)

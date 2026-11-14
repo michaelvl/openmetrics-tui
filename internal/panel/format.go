@@ -55,8 +55,15 @@ func fallbackLabel(labels map[string]string) string {
 // value v, or "" when none does (or v is NaN, which matches nothing, not even
 // a catch-all).
 func Color(ts []dashboard.Threshold, v float64) string {
+	t, _ := Match(ts, v)
+	return t.Color
+}
+
+// Match returns the first threshold that matches the raw value v, with the
+// same rules as Color.
+func Match(ts []dashboard.Threshold, v float64) (dashboard.Threshold, bool) {
 	if math.IsNaN(v) {
-		return ""
+		return dashboard.Threshold{}, false
 	}
 	for _, t := range ts {
 		var match bool
@@ -73,10 +80,10 @@ func Color(ts []dashboard.Threshold, v float64) string {
 			match = true
 		}
 		if match {
-			return t.Color
+			return t, true
 		}
 	}
-	return ""
+	return dashboard.Threshold{}, false
 }
 
 // FormatValue renders a cell value for the panel unit. "percent" multiplies

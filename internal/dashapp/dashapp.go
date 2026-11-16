@@ -35,6 +35,16 @@ func (v varFlags) Set(s string) error {
 	return nil
 }
 
+// stringsFlag collects a repeated string flag.
+type stringsFlag []string
+
+func (f *stringsFlag) String() string { return strings.Join(*f, ",") }
+
+func (f *stringsFlag) Set(s string) error {
+	*f = append(*f, s)
+	return nil
+}
+
 // managedOnlyFlags are meaningless without --managed.
 var managedOnlyFlags = []string{
 	"kube-context", "namespace", "kubectl-bin", "vm-bin",
@@ -68,7 +78,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&cfg.opts.PasswordFile, "prom-password-file", "", "file holding the basic auth password")
 	fs.BoolVar(&cfg.managed, "managed", false, "start kubectl proxy and a local VictoriaMetrics that scrapes pods (needs kubectl)")
 	fs.StringVar(&cfg.mopts.KubeContext, "kube-context", "", "kubectl context for --managed (default: current context)")
-	fs.StringVar(&cfg.mopts.Namespace, "namespace", "", "scrape only this namespace with --managed (overrides scrape.namespaces)")
+	fs.Var((*stringsFlag)(&cfg.mopts.Namespaces), "namespace", "scrape only this `namespace` with --managed, repeatable (overrides scrape.namespaces)")
 	fs.StringVar(&cfg.mopts.KubectlBin, "kubectl-bin", "", "kubectl binary for --managed (default: kubectl on PATH)")
 	fs.StringVar(&cfg.mopts.VMBin, "vm-bin", "", "victoria-metrics binary for --managed (default: victoria-metrics on PATH)")
 	fs.StringVar(&cfg.mopts.DataDir, "data-dir", "", "keep --managed data in this `dir` so history survives restarts (default: temp dir removed on exit)")

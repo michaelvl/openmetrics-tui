@@ -346,7 +346,7 @@ and `--flag` alike.
 | `--prom-password-file FILE` | File holding the basic-auth password. |
 | `--managed` | Start `kubectl proxy` and a local VictoriaMetrics (managed mode). |
 | `--kube-context NAME` | `kubectl` context for `--managed` (default: the current context). |
-| `--namespace NS` | Scrape only this namespace; overrides `scrape.namespaces`. |
+| `--namespace NS` | Scrape only this namespace; repeat for several. Overrides `scrape.namespaces`. |
 | `--kubectl-bin PATH` | `kubectl` binary (default: `kubectl` on `PATH`). |
 | `--vm-bin PATH` | `victoria-metrics` binary (default: `victoria-metrics` on `PATH`). |
 | `--data-dir DIR` | Keep the managed storage in `DIR`, so history survives restarts. Default: a temporary directory removed on exit. |

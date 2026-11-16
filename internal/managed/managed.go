@@ -33,8 +33,8 @@ const (
 // Options configures Start.
 type Options struct {
 	KubeContext string
-	// Namespace overrides the scrape section's namespaces.
-	Namespace  string
+	// Namespaces overrides the scrape section's namespaces.
+	Namespaces []string
 	KubectlBin string // default "kubectl"
 	VMBin      string // default "victoria-metrics"
 	// DataDir keeps history across runs; empty uses a temp dir removed on exit.
@@ -255,12 +255,8 @@ func (b *Backend) scrapeConfigPath(proxyHP string) (string, error) {
 		}
 		data = []byte(strings.ReplaceAll(string(raw), "${KUBE_PROXY}", proxyHP))
 	} else {
-		var ns []string
-		if b.opts.Namespace != "" {
-			ns = []string{b.opts.Namespace}
-		}
 		var err error
-		data, err = GenerateScrapeConfig(ScrapeParams{Scrape: b.opts.Scrape, Namespaces: ns, ProxyAddr: proxyHP})
+		data, err = GenerateScrapeConfig(ScrapeParams{Scrape: b.opts.Scrape, Namespaces: b.opts.Namespaces, ProxyAddr: proxyHP})
 		if err != nil {
 			return "", err
 		}
@@ -513,23 +509,16 @@ func (b *Backend) preflight(ctx context.Context) error {
 	if err := b.checkVM(ctx); err != nil {
 		return err
 	}
-	ns := b.opts.Namespace
-	var scope []string
-	switch {
-	case ns != "":
-		scope = []string{"-n", ns}
-	case b.opts.Scrape != nil && len(b.opts.Scrape.Namespaces) > 0:
-		scope = nil // checked per namespace below
-	default:
-		scope = []string{"--all-namespaces"}
+	nsList := b.opts.Namespaces
+	if len(nsList) == 0 && b.opts.Scrape != nil {
+		nsList = b.opts.Scrape.Namespaces
 	}
 	var namespaces [][]string
-	if scope != nil {
-		namespaces = [][]string{scope}
-	} else {
-		for _, n := range b.opts.Scrape.Namespaces {
-			namespaces = append(namespaces, []string{"-n", n})
-		}
+	if len(nsList) == 0 {
+		namespaces = [][]string{{"--all-namespaces"}}
+	}
+	for _, n := range nsList {
+		namespaces = append(namespaces, []string{"-n", n})
 	}
 	for _, sc := range namespaces {
 		where := "all namespaces"

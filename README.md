@@ -35,6 +35,11 @@ Handing the screen to an AI agent? Press `S` to save a plain-text snapshot - see
 [README-AGENT-CONSUMERS.md](README-AGENT-CONSUMERS.md), which explains the
 columns, colors and footer in detail.
 
+Agents and scripts can also read the screen without a terminal: start omtui
+with `-http-port <port>` and `GET /screenshot` (see
+[Over HTTP](#over-http)). omtui-dash additionally accepts commands this way,
+such as setting a variable, see [HTTP endpoint](#http-endpoint).
+
 ## Installation
 
 With Nix (flakes enabled):

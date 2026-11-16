@@ -637,7 +637,7 @@ func managedModel(t *testing.T) (*Model, *fakeBackend) {
 
 func TestManagedStatusAndHealth(t *testing.T) {
 	m, b := managedModel(t)
-	if v := m.View(); !strings.HasPrefix(v, m.d.Title) || !strings.Contains(v, "● ok") {
+	if v := m.View(); !strings.HasPrefix(v, m.d.Title) || !strings.Contains(v, "●") {
 		t.Errorf("title or footer status missing:\n%s", v)
 	}
 	if f := m.renderFooter(""); !strings.Contains(f, "Log (L)") || strings.Contains(f, "Restart (R)") {

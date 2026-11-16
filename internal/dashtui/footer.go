@@ -42,7 +42,12 @@ func (m *Model) statusSegment() string {
 	case m.loading():
 		return faintStyle.Render("● loading")
 	}
-	return okStyle.Render("●") + " ok"
+	return okStyle.Render("●")
+}
+
+// allOK reports whether statusSegment shows the plain green dot.
+func (m *Model) allOK() bool {
+	return m.healthy() && m.failing() == 0 && !m.loading()
 }
 
 // renderFooter builds the one-line footer, in the existing tool's `Name (key)`
@@ -53,11 +58,20 @@ func (m *Model) renderFooter(scrollHints string) string {
 		return clip(m.editFooter(), m.width)
 	}
 	status := m.statusSegment()
+	target := m.url
+	if m.kubeCtx != "" {
+		target = "kubectl context: " + m.kubeCtx
+	}
 	switch {
-	case m.kubeCtx != "":
-		status += footerSep + faintStyle.Render("kubectl context: "+m.kubeCtx)
-	case m.url != "":
-		status += footerSep + faintStyle.Render(m.url)
+	case target == "":
+		if m.allOK() {
+			status += " ok"
+		}
+	case m.allOK():
+		// Like omtui: the dot alone says ok, the target follows it directly.
+		status += " " + faintStyle.Render(target)
+	default:
+		status += footerSep + faintStyle.Render(target)
 	}
 	status += scrollHints
 
@@ -69,7 +83,7 @@ func (m *Model) renderFooter(scrollHints string) string {
 		}
 		left = style.Render(textutil.TruncateToWidth(m.snapshotMsg, max(12, m.width/2)))
 	}
-	segs := []string{left, "⟳ " + formatInterval(m.interval) + " (+/-)"}
+	segs := []string{left}
 	if m.paused {
 		segs = append(segs, warnStyle.Bold(true).Render("⏸ PAUSED (p)"))
 	}
@@ -86,6 +100,9 @@ func (m *Model) renderFooter(scrollHints string) string {
 	if m.backend != nil {
 		segs = append(segs, "Log (L)")
 	}
+	// Like omtui, the interval sits just before the status, since it says how
+	// often the target is scraped.
+	segs = append(segs, "⟳ "+formatInterval(m.interval)+" (+/-)")
 	// Segments that do not fit are dropped from the right, the status stays.
 	for len(segs) > 1 && lipgloss.Width(strings.Join(segs, footerSep)+footerSep+status) > m.width {
 		segs = segs[:len(segs)-1]

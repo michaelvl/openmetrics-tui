@@ -341,7 +341,7 @@ Controller health                                  <- dashboard title
                         now     5m      15m     1h       trend (1h)
  │ widget-controller    0.4●    0.417●  0.45●   0.6●     ██▇▆▆▅▄▃▃▂▁▁
  │ gadget-controller    3.2■    3.01■   2.62■   0.9●     ▁▁▂▃▃▄▅▆▆▇██
-? for help | ⟳ 10s (+/-) | Fold (space) | Sort (s): panel | Filter (/) | ● ok
+? for help | Fold (space) | Sort (s): panel | Filter (/) | ⟳ 10s (+/-) | ● ok
 ```
 
 - **Variable boxes** hold the values substituted for `$name` in every panel's
@@ -418,19 +418,19 @@ can sum to less than the total.
 | error text such as `bad_data: boom` in place of rows | that panel's query failed; other panels are unaffected |
 | `loading…` | the panel's first result has not arrived |
 
-The footer is `? for help | ⟳ <interval> (+/-) | Fold (space) | Sort (s): … |
-Filter (/)`, then optional segments, with the **health indicator at the right
-end**:
+The footer is `? for help | Fold (space) | Sort (s): … | Filter (/)`, then
+optional segments, then `⟳ <interval> (+/-)`, with the **health indicator at the
+right end**:
 
 | Right-end segment | Meaning |
 |---|---|
-| `● ok` | all panels loaded and none failing |
+| `● ok` | all panels loaded and none failing (the word `ok` is dropped when the Prometheus URL or `kubectl context:` follows, e.g. `● kubectl context: dev`) |
 | `● loading` | at least one panel has not loaded yet |
 | `⚠ N of M panels failing` | N panels' last query failed; the others are current |
 | `⚠ backend down` | in managed mode, the scraping/Prometheus backend is not running; panels show the last data and `Restart (R)` appears in the footer |
 
 After the status the footer may show the Prometheus URL or `kubectl context:
-<name>`. `⏸ PAUSED (p)` appears only while paused. Footer segments are dropped
+<name>`, separated by `|` unless the status is the plain `●`. `⏸ PAUSED (p)` appears only while paused. Footer segments are dropped
 from the right on a narrow terminal, so a missing `Sort` or `Filter` hint is not
 a mode change. Note that `●` in this footer is the health indicator, unrelated
 to the `●` threshold marker.

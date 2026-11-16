@@ -217,16 +217,21 @@ func (m *Model) saveSnapshot() tea.Cmd {
 	now := m.now()
 	name := fmt.Sprintf("omtui-dash-snapshot-%s.txt", now.Format("20060102-150405"))
 	path := filepath.Join(m.snapDir, name)
-	preamble := fmt.Sprintf(
-		"# omtui-dash snapshot of %q, taken %s\n# For format explanation see https://raw.githubusercontent.com/michaelvl/openmetrics-tui/refs/heads/main/README-AGENT-CONSUMERS.md\n\n",
-		m.d.Title, now.Format(time.RFC3339))
-	screen := m.renderHeader() + "\n" + strings.Join(m.lines, "\n") + "\n" + m.renderFooter("")
-	content := ansi.Strip(screen)
 
-	if err := os.WriteFile(path, []byte(preamble+content+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(m.snapshotText()), 0o644); err != nil {
 		m.snapshotMsg, m.snapshotErr = "snapshot failed: "+err.Error(), true
 	} else {
 		m.snapshotMsg, m.snapshotErr = "saved "+path, false
 	}
 	return m.tickFn(snapshotMsgDuration, func(time.Time) tea.Msg { return clearSnapshotMsg{gen: gen} })
+}
+
+// snapshotText is the preamble plus the plain-text screen, as saved by S and
+// served by the headless endpoint.
+func (m *Model) snapshotText() string {
+	preamble := fmt.Sprintf(
+		"# omtui-dash snapshot of %q, taken %s\n# For format explanation see https://raw.githubusercontent.com/michaelvl/openmetrics-tui/refs/heads/main/README-AGENT-CONSUMERS.md\n\n",
+		m.d.Title, m.now().Format(time.RFC3339))
+	screen := m.renderHeader() + "\n" + strings.Join(m.lines, "\n") + "\n" + m.renderFooter("")
+	return preamble + ansi.Strip(screen) + "\n"
 }

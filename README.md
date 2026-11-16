@@ -246,6 +246,20 @@ from it. The footer briefly echoes `saved <path>` (or a `snapshot
 failed: ...`
 error) in place of `? for help`, clearing itself again after a few seconds.
 
+### Over HTTP
+
+With `-http-port <port>` omtui also serves the same snapshot over HTTP, so a
+script or an agent can read the screen without a terminal:
+
+```sh
+omtui -url http://localhost:9100/metrics -http-port 8099
+curl http://localhost:8099/screenshot
+```
+
+The TUI keeps running; the response is what `S` would have saved, at the
+terminal's current width. The server listens on `127.0.0.1` only and has no
+authentication. Without the flag nothing is served.
+
 # omtui-dash: PromQL dashboard
 
 `omtui-dash` renders a YAML-defined dashboard in the terminal. Each panel is one
@@ -352,6 +366,7 @@ and `--flag` alike.
 | `--retention DUR` | Managed data retention (default `24h`). A unit suffix is required (`s m h d w M y`) and values below `24h` are rejected, because VictoriaMetrics does not accept them. |
 | `--scrape-config FILE` | Use your own VictoriaMetrics scrape config instead of the generated one. `${KUBE_PROXY}` in it is replaced by the proxy address, `127.0.0.1:PORT`. |
 | `--log-file FILE` | Append the output of `kubectl` and `victoria-metrics` to `FILE`. |
+| `--http-port PORT` | Serve the dashboard over HTTP on `127.0.0.1:PORT`. See [HTTP endpoint](#http-endpoint). |
 
 `--kube-context`, `--namespace`, `--kubectl-bin`, `--vm-bin`, `--data-dir`,
 `--retention`, `--scrape-config` and `--log-file` only apply with `--managed`.
@@ -542,6 +557,30 @@ including digits and `q`.
 A folded panel shows `▸ title`, the number of rows per colour and the worst row.
 Folded panels keep querying, so a fully folded dashboard is a live overview. A
 panel that fails shows its error on the panel without blanking the others.
+
+## HTTP endpoint
+
+With `--http-port PORT`, the running dashboard can be read and driven over HTTP,
+for scripts and agents. The TUI keeps running as usual. The server listens on
+`127.0.0.1` only and has no authentication; without the flag nothing is served.
+
+```sh
+omtui-dash --http-port 8099 my-dashboard.yaml
+
+curl http://localhost:8099/screenshot
+curl -X POST --data 'staging' http://localhost:8099/variables/namespace
+```
+
+- `GET /screenshot` returns what `S` would save: the plain-text dashboard with
+  every panel row, colour stripped, at the terminal's current width.
+- `POST /variables/<name>` sets a variable to the request body, with trailing
+  newlines removed. It is the same as typing the value into the variable's box:
+  the value must pass the variable's `pattern`, and every panel is queried
+  again. The answer is `204` on success, `404` for an unknown variable and `400`
+  for a value that fails validation.
+
+The POST returns as soon as the value is applied, not when the new data has
+arrived, so a `/screenshot` straight after it may still show panels loading.
 
 ## Checking a dashboard
 

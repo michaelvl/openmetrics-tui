@@ -1,6 +1,7 @@
 BINARY_NAME=omtui
 MOCK_BINARY_NAME=mock-server
 MOCK_PORT=8080
+DASH_HTTP_PORT=8099
 DASH_BINARY_NAME=omtui-dash
 KIND_CLUSTER=omtui
 
@@ -36,12 +37,13 @@ run: tui
 	./$(BINARY_NAME)
 
 # Run the dashboard against the mock server's Prometheus API. The mock is
-# stopped again when the dashboard exits.
+# stopped again when the dashboard exits. The dashboard's HTTP endpoint is on
+# DASH_HTTP_PORT (curl localhost:$(DASH_HTTP_PORT)/screenshot).
 run-dash: dash mock-server
 	./$(MOCK_BINARY_NAME) -port $(MOCK_PORT) >/dev/null & mock=$$!; \
 	trap 'kill $$mock' EXIT; \
 	sleep 1; \
-	./$(DASH_BINARY_NAME) --prom http://localhost:$(MOCK_PORT) examples/controllers.yaml
+	./$(DASH_BINARY_NAME) --prom http://localhost:$(MOCK_PORT) --http-port $(DASH_HTTP_PORT) examples/controllers.yaml
 
 # Validate the example dashboard and run every panel query against the mock.
 check-example: dash mock-server

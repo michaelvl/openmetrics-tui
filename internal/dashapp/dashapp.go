@@ -52,12 +52,13 @@ var managedOnlyFlags = []string{
 }
 
 type config struct {
-	check   bool
-	vars    varFlags
-	promURL string
-	opts    promapi.Options
-	managed bool
-	mopts   managed.Options
+	check    bool
+	vars     varFlags
+	promURL  string
+	opts     promapi.Options
+	managed  bool
+	httpPort int
+	mopts    managed.Options
 }
 
 // Main runs the command and exits the process.
@@ -76,6 +77,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&cfg.opts.TokenFile, "prom-token-file", "", "file holding a bearer token for --prom")
 	fs.StringVar(&cfg.opts.User, "prom-user", "", "basic auth user for --prom")
 	fs.StringVar(&cfg.opts.PasswordFile, "prom-password-file", "", "file holding the basic auth password")
+	fs.IntVar(&cfg.httpPort, "http-port", 0, "serve GET /screenshot and POST /variables/<name> on this loopback `port`; 0 disables")
 	fs.BoolVar(&cfg.managed, "managed", false, "start kubectl proxy and a local VictoriaMetrics that scrapes pods (needs kubectl)")
 	fs.StringVar(&cfg.mopts.KubeContext, "kube-context", "", "kubectl context for --managed (default: current context)")
 	fs.Var((*stringsFlag)(&cfg.mopts.Namespaces), "namespace", "scrape only this `namespace` with --managed, repeatable (overrides scrape.namespaces)")
@@ -150,7 +152,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	opts := dashtui.Options{Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode, URL: be.url}
+	opts := dashtui.Options{Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode, URL: be.url, HTTPPort: cfg.httpPort}
 	if be.managed != nil {
 		opts.Backend = be.managed
 		opts.KubeContext = be.managed.KubeContext()

@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/michaelvl/openmetrics-tui/internal/headless"
 	"github.com/michaelvl/openmetrics-tui/internal/managed"
 	"github.com/michaelvl/openmetrics-tui/internal/promapi"
 )
@@ -747,5 +748,41 @@ func TestStepInterval(t *testing.T) {
 		if got := stepInterval(c.cur, c.faster); got != c.want {
 			t.Errorf("stepInterval(%v, %v) = %v, want %v", c.cur, c.faster, got, c.want)
 		}
+	}
+}
+
+func TestHeadlessScreenshotAndSetVariable(t *testing.T) {
+	m := newTestModel(t, mustDash(t, testDash), &fakeQuerier{handle: demoHandler}, nil)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 10})
+	start(m)
+
+	shot := make(chan string, 1)
+	m.Update(screenshotReq{reply: shot})
+	if s := <-shot; !strings.Contains(s, "# omtui-dash snapshot") || !strings.Contains(s, "API p99 latency") || strings.Contains(s, "\x1b") {
+		t.Errorf("screenshot = %q", s)
+	}
+
+	set := func(name, value string) error {
+		reply := make(chan error, 1)
+		_, cmd := m.Update(setVarReq{name: name, value: value, reply: reply})
+		_ = cmd
+		return <-reply
+	}
+	if err := set("nope", "x"); !errors.Is(err, headless.ErrNotFound) {
+		t.Errorf("unknown variable: %v", err)
+	}
+	if err := set("namespace", "Not Valid!"); !errors.Is(err, headless.ErrInvalid) {
+		t.Errorf("invalid value: %v", err)
+	}
+	if m.vals["namespace"] != "prod" {
+		t.Errorf("a refused value changed the variable to %q", m.vals["namespace"])
+	}
+	oldGen := m.gen
+	press(m, "1") // an open box on the variable is closed by the POST
+	if err := set("namespace", "staging"); err != nil {
+		t.Fatal(err)
+	}
+	if m.vals["namespace"] != "staging" || m.gen == oldGen || m.edit.kind != editNone {
+		t.Errorf("vals = %v, gen %d -> %d, edit = %v", m.vals, oldGen, m.gen, m.edit.kind)
 	}
 }

@@ -49,6 +49,9 @@ type Options struct {
 	// SnapshotDir is where S writes its file; empty means the working
 	// directory.
 	SnapshotDir string
+	// HTTPPort, when non-zero, serves GET /screenshot and POST
+	// /variables/<name> on that loopback port.
+	HTTPPort int
 }
 
 const (
@@ -106,6 +109,13 @@ type (
 		results map[string]lookupResult
 	}
 	clearSnapshotMsg struct{ gen int }
+	// screenshotReq and setVarReq come from the headless server; the reply
+	// channels are buffered.
+	screenshotReq struct{ reply chan<- string }
+	setVarReq     struct {
+		name, value string
+		reply       chan<- error
+	}
 )
 
 // Model is the Bubble Tea model. It is used through a pointer so panel state
@@ -382,6 +392,12 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return tea.Batch(append(cmds, m.healthCmd())...)
 	case lookupMsg:
 		m.handleLookup(msg)
+	case screenshotReq:
+		msg.reply <- m.snapshotText()
+	case setVarReq:
+		cmd, err := m.setVar(msg.name, msg.value)
+		msg.reply <- err
+		return cmd
 	case clearSnapshotMsg:
 		if msg.gen == m.snapshotGen {
 			m.snapshotMsg = ""

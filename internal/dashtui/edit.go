@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/michaelvl/openmetrics-tui/internal/dashboard"
+	"github.com/michaelvl/openmetrics-tui/internal/headless"
 )
 
 type editKind int
@@ -308,9 +309,32 @@ func (m *Model) applyVar() (cmd tea.Cmd, ok bool) {
 		return nil, false
 	}
 	m.stopEdit()
-	if val == m.vals[vr.Name] {
-		return nil, true
+	return m.assignVar(vr.Name, val), true
+}
+
+// assignVar sets a validated value and re-queries when it changed.
+func (m *Model) assignVar(name, val string) tea.Cmd {
+	if val == m.vals[name] {
+		return nil
 	}
-	m.vals[vr.Name] = val
-	return m.restartQueries(), true
+	m.vals[name] = val
+	return m.restartQueries()
+}
+
+// setVar sets a variable by name, as the headless endpoint does. An open box
+// on that variable is closed, so a later enter cannot undo the new value.
+func (m *Model) setVar(name, val string) (tea.Cmd, error) {
+	for i, vr := range m.d.Variables {
+		if vr.Name != name {
+			continue
+		}
+		if err := vr.Check(val); err != nil {
+			return nil, fmt.Errorf("%w: $%s: %v", headless.ErrInvalid, name, err)
+		}
+		if m.edit.kind == editVar && m.edit.v == i {
+			m.stopEdit()
+		}
+		return m.assignVar(name, val), nil
+	}
+	return nil, fmt.Errorf("%w: no variable %q", headless.ErrNotFound, name)
 }

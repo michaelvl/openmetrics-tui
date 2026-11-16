@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"math"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/michaelvl/openmetrics-tui/internal/fetch"
 	"github.com/michaelvl/openmetrics-tui/internal/filter"
+	"github.com/michaelvl/openmetrics-tui/internal/headless"
 	"github.com/michaelvl/openmetrics-tui/internal/histogram"
 	"github.com/michaelvl/openmetrics-tui/internal/store"
 
@@ -45,6 +47,8 @@ type Config struct {
 	DeltaMode    string
 	HideStatic   bool
 	Aggregation  string
+	// HTTPPort, when non-zero, serves GET /screenshot on that loopback port.
+	HTTPPort int
 }
 
 type model struct {
@@ -230,10 +234,32 @@ func Run() {
 		input:      input,
 	}
 
-	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
+	// Cancelled on return, which stops the HTTP server.
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	prog := tea.NewProgram(m, tea.WithAltScreen())
+	if cfg.HTTPPort != 0 {
+		addr, err := headless.Serve(ctx, cfg.HTTPPort, headless.Handler(screenSource{prog.Send}))
+		if err != nil {
+			fmt.Printf("Error: --http-port: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "omtui: serving http://%s/screenshot\n", addr)
+	}
+	if _, err := prog.Run(); err != nil {
 		fmt.Printf("Error running program: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// screenSource answers the headless server's requests through the program.
+type screenSource struct{ send func(tea.Msg) }
+
+// screenshotReq asks Update for the current snapshot text.
+type screenshotReq struct{ reply chan<- string }
+
+func (s screenSource) Screenshot(ctx context.Context) (string, error) {
+	return headless.Ask(ctx, s.send, func(r chan<- string) tea.Msg { return screenshotReq{r} })
 }
 
 func (m model) Init() tea.Cmd {
@@ -246,6 +272,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case screenshotReq:
+		msg.reply <- m.snapshotText(time.Now())
+		return m, nil
 	case tea.KeyMsg:
 		// A focused header box swallows the keyboard, so that typing a filter
 		// cannot trip over the single-letter global keys - q would otherwise quit
@@ -832,13 +861,8 @@ func (m *model) saveSnapshot() tea.Cmd {
 
 	now := time.Now()
 	path := fmt.Sprintf("omtui-snapshot-%s.txt", now.Format("20060102-150405"))
-	preamble := fmt.Sprintf(
-		"# omtui snapshot, taken %s\n# For format explanation see https://raw.githubusercontent.com/michaelvl/openmetrics-tui/refs/heads/main/README-AGENT-CONSUMERS.md\n\n",
-		now.Format(time.RFC3339))
-	screen := m.renderHeader() + "\n" + m.snapshotContent() + "\n" + m.renderFooter("")
-	content := ansi.Strip(screen)
 
-	if err := os.WriteFile(path, []byte(preamble+content+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(m.snapshotText(now)), 0o644); err != nil {
 		m.snapshotMsg = "snapshot failed: " + err.Error()
 		m.snapshotErr = true
 	} else {
@@ -849,6 +873,16 @@ func (m *model) saveSnapshot() tea.Cmd {
 	return tea.Tick(snapshotMsgDuration, func(time.Time) tea.Msg {
 		return clearSnapshotMsg{gen: gen}
 	})
+}
+
+// snapshotText is the preamble plus the plain-text screen, as saved by S and
+// served by the headless endpoint.
+func (m model) snapshotText(now time.Time) string {
+	preamble := fmt.Sprintf(
+		"# omtui snapshot, taken %s\n# For format explanation see https://raw.githubusercontent.com/michaelvl/openmetrics-tui/refs/heads/main/README-AGENT-CONSUMERS.md\n\n",
+		now.Format(time.RFC3339))
+	screen := m.renderHeader() + "\n" + m.snapshotContent() + "\n" + m.renderFooter("")
+	return preamble + ansi.Strip(screen) + "\n"
 }
 
 // truncateMessage truncates a message to maxLen, adding "..." if truncated
@@ -1323,6 +1357,7 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.FilterLabel, "filter-label", "", "Label filter: comma-separated clauses that must all match, each key=value, key!=value, key=~regex, key!~regex, or a bare regex tried against every label value (e.g. 'env=prod,region!=eu')")
 	flag.StringVar(&cfg.DeltaMode, "delta-mode", store.DeltaModeNext, "Delta mode: off, next, view")
 	flag.BoolVar(&cfg.HideStatic, "hide-static", false, "Hide metrics whose recent values never change")
+	flag.IntVar(&cfg.HTTPPort, "http-port", 0, "Serve the current screen as plain text on this loopback `port` (GET /screenshot); 0 disables")
 	flag.StringVar(&cfg.Aggregation, "aggregation", "", "Combine series that differ only in other labels: a comma-separated label list, optionally preceded by sum, avg, min, max or count (e.g. 'pod', 'avg pod,instance', 'count'). Histograms fold with sum only; summaries never fold")
 
 	flag.Parse()

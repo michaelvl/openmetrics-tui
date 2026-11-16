@@ -831,9 +831,9 @@ func (m *model) saveSnapshot() tea.Cmd {
 	gen := m.snapshotGen
 
 	now := time.Now()
-	path := fmt.Sprintf("openmetrics-tui-snapshot-%s.txt", now.Format("20060102-150405"))
+	path := fmt.Sprintf("omtui-snapshot-%s.txt", now.Format("20060102-150405"))
 	preamble := fmt.Sprintf(
-		"# openmetrics-tui snapshot, taken %s\n# For format explaination see https://raw.githubusercontent.com/michaelvl/openmetrics-tui/refs/heads/main/README-AGENT-CONSUMERS.md\n\n",
+		"# omtui snapshot, taken %s\n# For format explanation see https://raw.githubusercontent.com/michaelvl/openmetrics-tui/refs/heads/main/README-AGENT-CONSUMERS.md\n\n",
 		now.Format(time.RFC3339))
 	screen := m.renderHeader() + "\n" + m.snapshotContent() + "\n" + m.renderFooter("")
 	content := ansi.Strip(screen)

@@ -216,7 +216,7 @@ Deltas never cross a break, whatever the metric kind:
 ## Plain-text snapshots
 
 Press `S` (shift-s; lowercase `s` is the unrelated hide-static toggle) to save
-the current view to `openmetrics-tui-snapshot-<timestamp>.txt` in the working
+the current view to `omtui-snapshot-<timestamp>.txt` in the working
 directory. This is the preferred way to hand a screen to an AI agent instead of
 an image screenshot - it carries exact numbers with no risk of OCR misreading
 them.
@@ -236,9 +236,8 @@ rather than a height limitation.
 The file opens with a short preamble:
 
 ```
-# openmetrics-tui snapshot, taken 2026-09-30T15:57:37Z
-# Colour is stripped from this file - see README-AGENT-CONSUMERS.md
-# for how to read it without it.
+# omtui snapshot, taken 2026-09-30T15:57:37Z
+# For format explanation see https://raw.githubusercontent.com/michaelvl/openmetrics-tui/refs/heads/main/README-AGENT-CONSUMERS.md
 ```
 
 That timestamp is the wall-clock moment the snapshot was taken - the column

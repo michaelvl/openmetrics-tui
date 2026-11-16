@@ -217,7 +217,9 @@ func (m *Model) saveSnapshot() tea.Cmd {
 	now := m.now()
 	name := fmt.Sprintf("omtui-dash-snapshot-%s.txt", now.Format("20060102-150405"))
 	path := filepath.Join(m.snapDir, name)
-	preamble := fmt.Sprintf("# omtui-dash snapshot of %q, taken %s\n\n", m.d.Title, now.Format(time.RFC3339))
+	preamble := fmt.Sprintf(
+		"# omtui-dash snapshot of %q, taken %s\n# For format explanation see https://raw.githubusercontent.com/michaelvl/openmetrics-tui/refs/heads/main/README-AGENT-CONSUMERS.md\n\n",
+		m.d.Title, now.Format(time.RFC3339))
 	screen := m.renderHeader() + "\n" + strings.Join(m.lines, "\n") + "\n" + m.renderFooter("")
 	content := ansi.Strip(screen)
 

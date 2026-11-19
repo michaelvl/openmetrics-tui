@@ -14,17 +14,6 @@ it a backend:
 The flags and the dashboard YAML are described in the
 [README](../README.md#omtui-dash-promql-dashboard).
 
-> **Not yet verified.** Managed mode was tested with real VictoriaMetrics
-> (1.156.0 and, via the Nix package, 1.154.0), but against a _fake Kubernetes
-> API_ standing in for `kubectl proxy`. It has not been run against a real
-> cluster. Specifically unverified: `kubectl proxy` with a real API server (watch
-> behaviour, long-lived connections, timeouts); pod scrapes of pods that serve
-> metrics over TLS or a non-HTTP port; exec-plugin authentication (EKS, GKE, AKS);
-> the RBAC behaviour described below; API server load; and VictoriaMetrics
-> versions older than 1.154.0. Details are in
-> [managed-verification.md](managed-verification.md). Treat the cluster-facing
-> parts of this page as the intended behaviour, and please report what differs.
-
 ## Managed mode
 
 ```sh
@@ -137,8 +126,7 @@ Panels then fill in immediately on the next start. Samples are kept for
 `--retention` (default `24h`; a unit suffix is required, and VictoriaMetrics
 rejects less than 24h). Gaps while the dashboard was not running stay gaps.
 Use one data directory per cluster and scrape setup, and do not run two
-instances on the same directory (VictoriaMetrics does not support sharing one;
-how the second instance fails was not tested).
+instances on the same directory (VictoriaMetrics does not support sharing one).
 
 ### Load and limits
 

@@ -98,6 +98,9 @@ func (m *Model) logView(h int) []string {
 	return out
 }
 
+// snapshotHelpLine is the help line for S, dropped when snapshots are off.
+const snapshotHelpLine = "  S           Save the whole dashboard to a plain-text snapshot file\n"
+
 const helpText = `
 Help
 
@@ -123,13 +126,17 @@ Press ? to close
 `
 
 func (m *Model) renderHelp() string {
+	text := helpText
+	if m.noSnap {
+		text = strings.Replace(text, snapshotHelpLine, "", 1)
+	}
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("63")).
 		Padding(1, 2).
 		Background(lipgloss.Color("235")).
 		Foreground(lipgloss.Color("252")).
-		Render(helpText)
+		Render(text)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box,
 		lipgloss.WithWhitespaceChars(" "), lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
 }

@@ -213,6 +213,10 @@ func sortName(s panel.SortMode) string {
 func (m *Model) saveSnapshot() tea.Cmd {
 	m.snapshotGen++
 	gen := m.snapshotGen
+	if m.noSnap {
+		m.snapshotMsg, m.snapshotErr = "snapshots are disabled in this session", false
+		return m.tickFn(snapshotMsgDuration, func(time.Time) tea.Msg { return clearSnapshotMsg{gen: gen} })
+	}
 
 	now := m.now()
 	name := fmt.Sprintf("omtui-dash-snapshot-%s.txt", now.Format("20060102-150405"))

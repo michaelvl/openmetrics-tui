@@ -49,6 +49,9 @@ type Options struct {
 	// SnapshotDir is where S writes its file; empty means the working
 	// directory.
 	SnapshotDir string
+	// NoSnapshot disables the S key and hides its help line, for sessions
+	// with no meaningful local filesystem.
+	NoSnapshot bool
 	// HTTPPort, when non-zero, serves GET /screenshot and POST
 	// /variables/<name> on that loopback port.
 	HTTPPort int
@@ -130,6 +133,7 @@ type Model struct {
 	url     string
 	now     func() time.Time
 	snapDir string
+	noSnap  bool
 	// tickFn schedules a tick; tests replace it so no timer runs.
 	tickFn func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 
@@ -224,6 +228,7 @@ func New(opts Options) *Model {
 		url:      opts.URL,
 		now:      now,
 		snapDir:  opts.SnapshotDir,
+		noSnap:   opts.NoSnapshot,
 		tickFn:   tea.Tick,
 		vals:     vals,
 		interval: d.Refresh,

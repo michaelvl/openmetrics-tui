@@ -786,3 +786,37 @@ func TestHeadlessScreenshotAndSetVariable(t *testing.T) {
 		t.Errorf("vals = %v, gen %d -> %d, edit = %v", m.vals, oldGen, m.gen, m.edit.kind)
 	}
 }
+
+func TestNoSnapshotDisablesSaving(t *testing.T) {
+	dir := t.TempDir()
+	m := newTestModel(t, mustDash(t, testDash), &fakeQuerier{handle: demoHandler}, func(o *Options) {
+		o.SnapshotDir, o.NoSnapshot = dir, true
+	})
+	start(m)
+	m.Update(key("S"))
+	if files, _ := filepath.Glob(filepath.Join(dir, "*")); len(files) != 0 {
+		t.Errorf("files written: %v", files)
+	}
+	if f := m.renderFooter(""); strings.Contains(f, "saved ") || !strings.Contains(f, "disabled") {
+		t.Errorf("footer = %q", f)
+	}
+	press(m, "?")
+	if v := m.View(); !strings.Contains(v, "Help") || strings.Contains(v, "snapshot file") {
+		t.Errorf("help should omit the S line:\n%s", v)
+	}
+}
+
+func TestNewSessionBuildsModelWithContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	m := NewSession(ctx, Options{
+		Dashboard: mustDash(t, testDash), Values: map[string]string{}, Querier: &fakeQuerier{handle: demoHandler},
+		Now: func() time.Time { return testNow },
+	})
+	if m.rootCtx.Err() != nil {
+		t.Fatal("context cancelled early")
+	}
+	cancel()
+	if m.rootCtx.Err() == nil {
+		t.Error("session context not bound to ctx")
+	}
+}

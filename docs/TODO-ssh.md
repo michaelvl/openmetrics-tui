@@ -17,13 +17,13 @@ and its exit criteria; tick a phase only when the exit criteria hold.
 
 ## Phase 1: split session construction from program start
 
-- [ ] `internal/dashtui/run.go`: extract `NewSession(ctx, opts) *Model`; `Run` keeps the local program and the headless HTTP server
-- [ ] Add `Options.NoSnapshot`; `saveSnapshot` returns early with a clear message when set
-- [ ] Hide the `S` hint in `footer.go` when `NoSnapshot` is set
-- [ ] Read `model.go` and `keys.go` for any other use of `os.Stdout`, `os.Stderr` or the working directory
-- [ ] Test: with `NoSnapshot` the key does nothing, no file is written, the hint is absent
-- [ ] Existing `dashtui` tests unchanged and green
-- [ ] Exit: `go test ./...` passes, local `omtui-dash` behaves exactly as before
+- [x] `internal/dashtui/run.go`: extract `NewSession(ctx, opts) *Model`; `Run` keeps the local program and the headless HTTP server
+- [x] Add `Options.NoSnapshot`; `saveSnapshot` returns early with a clear message when set
+- [x] Hide the `S` hint in `footer.go` (the hint is in the help overlay in `screen.go`, footer has none) when `NoSnapshot` is set
+- [x] Read `model.go` and `keys.go` for any other use of `os.Stdout`, `os.Stderr` or the working directory
+- [x] Test: with `NoSnapshot` the key does nothing, no file is written, the hint is absent
+- [x] Existing `dashtui` tests unchanged and green
+- [x] Exit: `go test ./...` passes, local `omtui-dash` behaves exactly as before
 
 ## Phase 2: SSH server, colours still global
 

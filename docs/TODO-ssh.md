@@ -27,24 +27,24 @@ and its exit criteria; tick a phase only when the exit criteria hold.
 
 ## Phase 2: SSH server, colours still global
 
-- [ ] New package `internal/sshserve` with `Config` and `Serve(ctx, cfg, newModel)`
-- [ ] Middleware stack: `bubbletea.Middleware`, `activeterm.Middleware` (reject non-PTY with a message), `logging.Middleware`
-- [ ] Public-key handler that re-reads `AuthKeysPath` on every attempt; accept all with `AllowAnyKey`
-- [ ] Session cap: counting semaphore middleware, one-line rejection when full
-- [ ] Graceful shutdown on `ctx.Done()` (`srv.Shutdown`, 5 s timeout)
-- [ ] Host key: `wish.WithHostKeyPath`; generate ed25519 with mode 0600 when absent; log the fingerprint
-- [ ] `dashapp.go`: flags `--ssh-listen`, `--ssh-host-key`, `--ssh-authorized-keys`, `--ssh-allow-any-key`, `--ssh-max-sessions` (default 20)
-- [ ] `dashapp.go`: reject `--ssh-listen` with `--managed`, `--check` or `--http-port` (exit 2)
-- [ ] `dashapp.go`: require an authorized-keys file or `--ssh-allow-any-key`; warn at startup for the latter
-- [ ] `dashapp.go`: after `newBackend`, call `sshserve.Serve` with a handler building `dashtui.NewSession` per connection (same `Dashboard`, `Values`, `Querier`; `NoSnapshot: true`) and `tea.WithAltScreen()`
-- [ ] Startup message on stderr: listen address and host key fingerprint
-- [ ] Test: accepts a listed key, rejects an unlisted key
-- [ ] Test: rejects a session without a PTY
-- [ ] Test: window-size request reaches the model as `tea.WindowSizeMsg`
-- [ ] Test: session cap rejects the N+1th connection and frees a slot on close
-- [ ] Test: cancelling the context closes the listener and ends sessions
-- [ ] Test: flag validation for each incompatible combination
-- [ ] Exit: `ssh -p 2222 localhost` against `mock-server` shows the real dashboard; two terminals hold independent variable values; quitting one leaves the other running
+- [x] New package `internal/sshserve` with `Config` and `Serve(ctx, cfg, newModel)`
+- [x] Middleware stack: `bubbletea.Middleware`, `activeterm.Middleware` (reject non-PTY with a message), `logging.Middleware`
+- [x] Public-key handler that re-reads `AuthKeysPath` on every attempt; accept all with `AllowAnyKey`
+- [x] Session cap: counting semaphore middleware, one-line rejection when full
+- [x] Graceful shutdown on `ctx.Done()` (`srv.Shutdown`, 5 s timeout)
+- [x] Host key: `wish.WithHostKeyPath`; generate ed25519 with mode 0600 when absent; log the fingerprint
+- [x] `dashapp.go`: flags `--ssh-listen`, `--ssh-host-key`, `--ssh-authorized-keys`, `--ssh-allow-any-key`, `--ssh-max-sessions` (default 20)
+- [x] `dashapp.go`: reject `--ssh-listen` with `--managed`, `--check` or `--http-port` (exit 2)
+- [x] `dashapp.go`: require an authorized-keys file or `--ssh-allow-any-key`; warn at startup for the latter
+- [x] `dashapp.go`: after `newBackend`, call `sshserve.Serve` with a handler building `dashtui.NewSession` per connection (same `Dashboard`, `Values`, `Querier`; `NoSnapshot: true`) and `tea.WithAltScreen()`
+- [x] Startup message on stderr: listen address and host key fingerprint
+- [x] Test: accepts a listed key, rejects an unlisted key
+- [x] Test: rejects a session without a PTY
+- [x] Test: window-size request reaches the model as `tea.WindowSizeMsg`
+- [x] Test: session cap rejects the N+1th connection and frees a slot on close
+- [x] Test: cancelling the context closes the listener and ends sessions
+- [x] Test: flag validation for each incompatible combination
+- [x] Exit: `ssh -p 2222 localhost` against `mock-server` shows the real dashboard; two terminals hold independent variable values; quitting one leaves the other running
 
 ## Phase 3: per-session colours
 

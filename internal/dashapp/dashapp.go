@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"slices"
@@ -15,10 +16,14 @@ import (
 	"syscall"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/ssh"
+
 	"github.com/michaelvl/openmetrics-tui/internal/dashboard"
 	"github.com/michaelvl/openmetrics-tui/internal/dashtui"
 	"github.com/michaelvl/openmetrics-tui/internal/managed"
 	"github.com/michaelvl/openmetrics-tui/internal/promapi"
+	"github.com/michaelvl/openmetrics-tui/internal/sshserve"
 )
 
 // varFlags collects repeated --var name=value flags.
@@ -59,7 +64,17 @@ type config struct {
 	managed  bool
 	httpPort int
 	mopts    managed.Options
+	ssh      sshserve.Config
 }
+
+// sshOnlyFlags are meaningless without --ssh-listen.
+var sshOnlyFlags = []string{
+	"ssh-host-key", "ssh-authorized-keys", "ssh-allow-any-key", "ssh-max-sessions",
+}
+
+// defaultHostKey is where the SSH host key is kept unless --ssh-host-key says
+// otherwise.
+const defaultHostKey = "omtui-dash-host-key"
 
 // Main runs the command and exits the process.
 func Main() {
@@ -87,6 +102,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&cfg.mopts.Retention, "retention", managed.DefaultRetention, "data retention for --managed, with a unit suffix (minimum 24h)")
 	fs.StringVar(&cfg.mopts.ScrapeConfig, "scrape-config", "", "use this scrape config instead of generating one; ${KUBE_PROXY} is replaced by the proxy address")
 	fs.StringVar(&cfg.mopts.LogFile, "log-file", "", "append kubectl and victoria-metrics output to this `file` (--managed)")
+	fs.StringVar(&cfg.ssh.Listen, "ssh-listen", "", "serve the dashboard over SSH on this `address` (for example :2222) instead of the local terminal")
+	fs.StringVar(&cfg.ssh.HostKeyPath, "ssh-host-key", defaultHostKey, "SSH host key `file`; an ed25519 key is generated when it does not exist")
+	fs.StringVar(&cfg.ssh.AuthKeysPath, "ssh-authorized-keys", "", "OpenSSH authorized_keys `file` listing who may connect; re-read on every connection")
+	fs.BoolVar(&cfg.ssh.AllowAnyKey, "ssh-allow-any-key", false, "let any public key connect (only for non-sensitive metrics)")
+	fs.IntVar(&cfg.ssh.MaxSessions, "ssh-max-sessions", 20, "maximum number of concurrent SSH sessions")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "Usage: omtui-dash [flags] dashboard.yaml\n\nFlags:\n")
 		fs.PrintDefaults()
@@ -113,6 +133,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stderr, "omtui-dash: %s only apply with --managed\n", strings.Join(stray, ", "))
 			return 2
 		}
+	}
+	if code := validateSSH(fs, &cfg, stderr); code != 0 {
+		return code
 	}
 	if fs.NArg() != 1 {
 		fs.Usage()
@@ -152,12 +175,78 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
+	if cfg.ssh.Listen != "" {
+		return serveSSH(ctx, &cfg, d, vals, be, stderr)
+	}
 	opts := dashtui.Options{Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode, URL: be.url, HTTPPort: cfg.httpPort}
 	if be.managed != nil {
 		opts.Backend = be.managed
 		opts.KubeContext = be.managed.KubeContext()
 	}
 	if err := dashtui.Run(ctx, opts); err != nil && ctx.Err() == nil {
+		_, _ = fmt.Fprintf(stderr, "omtui-dash: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// validateSSH checks the --ssh-* flags and returns the exit code to stop with,
+// or 0 to go on.
+func validateSSH(fs *flag.FlagSet, cfg *config, stderr io.Writer) int {
+	if cfg.ssh.Listen == "" {
+		var stray []string
+		fs.Visit(func(f *flag.Flag) {
+			if slices.Contains(sshOnlyFlags, f.Name) {
+				stray = append(stray, "--"+f.Name)
+			}
+		})
+		if len(stray) > 0 {
+			_, _ = fmt.Fprintf(stderr, "omtui-dash: %s only apply with --ssh-listen\n", strings.Join(stray, ", "))
+			return 2
+		}
+		return 0
+	}
+	var bad []string
+	if cfg.managed {
+		bad = append(bad, "--managed")
+	}
+	if cfg.check {
+		bad = append(bad, "--check")
+	}
+	if cfg.httpPort != 0 {
+		bad = append(bad, "--http-port")
+	}
+	if len(bad) > 0 {
+		_, _ = fmt.Fprintf(stderr, "omtui-dash: --ssh-listen cannot be combined with %s\n", strings.Join(bad, ", "))
+		return 2
+	}
+	if cfg.ssh.AuthKeysPath == "" && !cfg.ssh.AllowAnyKey {
+		_, _ = fmt.Fprintln(stderr, "omtui-dash: --ssh-listen needs --ssh-authorized-keys or --ssh-allow-any-key")
+		return 2
+	}
+	if cfg.ssh.MaxSessions < 1 {
+		_, _ = fmt.Fprintln(stderr, "omtui-dash: --ssh-max-sessions must be at least 1")
+		return 2
+	}
+	return 0
+}
+
+// serveSSH serves one dashboard session per SSH connection, all sharing the
+// backend's Querier, until ctx is cancelled.
+func serveSSH(ctx context.Context, cfg *config, d *dashboard.Dashboard, vals map[string]string, be *backend, stderr io.Writer) int {
+	if cfg.ssh.AllowAnyKey {
+		_, _ = fmt.Fprintln(stderr, "omtui-dash: warning: --ssh-allow-any-key lets anyone who can reach the port view the dashboard")
+	}
+	cfg.ssh.OnListen = func(addr net.Addr, fingerprint string) {
+		_, _ = fmt.Fprintf(stderr, "omtui-dash: serving SSH on %s, host key %s\n", addr, fingerprint)
+	}
+	newModel := func(ctx context.Context, _ ssh.Session) (tea.Model, []tea.ProgramOption) {
+		m := dashtui.NewSession(ctx, dashtui.Options{
+			Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode, URL: be.url, NoSnapshot: true,
+		})
+		return m, []tea.ProgramOption{tea.WithAltScreen()}
+	}
+	if err := sshserve.Serve(ctx, cfg.ssh, newModel); err != nil {
 		_, _ = fmt.Fprintf(stderr, "omtui-dash: %v\n", err)
 		return 1
 	}

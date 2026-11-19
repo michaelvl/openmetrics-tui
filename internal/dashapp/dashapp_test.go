@@ -213,3 +213,25 @@ func TestBadVarAndUsage(t *testing.T) {
 		t.Errorf("no args: code %d", code)
 	}
 }
+
+func TestSSHFlagValidation(t *testing.T) {
+	path := writeDash(t, dash)
+	keys := filepath.Join(t.TempDir(), "authorized_keys")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--ssh-listen", ":0", "--ssh-authorized-keys", keys, "--managed"}, "--managed"},
+		{[]string{"--ssh-listen", ":0", "--ssh-authorized-keys", keys, "--check", "--prom", "http://x"}, "--check"},
+		{[]string{"--ssh-listen", ":0", "--ssh-authorized-keys", keys, "--http-port", "9999", "--prom", "http://x"}, "--http-port"},
+		{[]string{"--ssh-listen", ":0", "--prom", "http://x"}, "--ssh-authorized-keys"},
+		{[]string{"--ssh-listen", ":0", "--ssh-allow-any-key", "--ssh-max-sessions", "0", "--prom", "http://x"}, "--ssh-max-sessions"},
+		{[]string{"--ssh-allow-any-key", "--prom", "http://x"}, "only apply with --ssh-listen"},
+		{[]string{"--ssh-max-sessions", "5", "--prom", "http://x"}, "--ssh-max-sessions"},
+	} {
+		code, _, errOut := run(append(tc.args, path)...)
+		if code != 2 || !strings.Contains(errOut, tc.want) {
+			t.Errorf("%v: code %d, stderr %q", tc.args, code, errOut)
+		}
+	}
+}

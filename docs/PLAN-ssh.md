@@ -67,6 +67,36 @@ Confirm the assumptions the rest relies on before writing code.
    `textinput` styles in `Model.input`. `internal/panel` and `internal/textutil`
    use only `lipgloss.Width`, which needs no renderer.
 
+Result (done): Wish v1.4.7 (with `charmbracelet/ssh`) resolves with Bubble Tea
+1.3.10, lipgloss 1.1.0, bubbles 0.21.0, x/ansi 0.10.1 and termenv 0.16.0
+unchanged; it only raises `creack/pty` to 1.1.21 and adds small x/ deps.
+`go mod tidy` drops Wish until something imports it, so Phase 2 re-adds it.
+The spike served `dashtui.New` over Wish and a PTY client drew the dashboard,
+followed a window resize (120x36 to 80x20) and quit on `q`, leaving the server
+up. Colour baseline: the server's stdout was not a terminal, so the default
+renderer picked the Ascii profile and the session carried no colour escapes at
+all (not even faint or bold). Phase 3 must therefore build styles from the
+session renderer.
+
+Final audit of default-renderer use, all in `internal/dashtui`:
+
+- `view.go`: `faintStyle`, `errStyle`, `warnStyle`, `okStyle`, `accentStyle`,
+  `titleStyle`, `dashTitleStyle`, and `colorStyle` (`lipgloss.NewStyle()` per
+  call).
+- `header.go`: variable box border colours and `captionStyle`
+  (`lipgloss.NewStyle().Foreground(...)`), the box `Border`/`BorderForeground`
+  style, and the edit-box style at `header.go:221`.
+- `screen.go`: the help-overlay box style (`screen.go:126`, border, background
+  and foreground) and the `lipgloss.Place` whitespace foreground.
+- `Model.input` (`textinput.New()`): `PromptStyle` and `TextStyle` are zero
+  styles with no attributes. `PlaceholderStyle` and `CompletionStyle` are grey
+  240 but unused: no placeholder is set and suggestions are off. The static
+  cursor renders `Cursor.Style.Reverse(true)`, a zero style plus reverse, which
+  still goes through the default renderer, so it also needs the session
+  renderer (set `Cursor.Style`, `PromptStyle`, `TextStyle` from it).
+- `internal/panel` and `internal/textutil`: only `lipgloss.Width` (`panel`
+  does not import lipgloss at all), so nothing to change.
+
 Exit criteria: spike works, audit list is final, no dependency conflict.
 
 ## Phase 1: split session construction from program start (0.5 day)

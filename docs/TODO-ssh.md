@@ -5,15 +5,15 @@ and its exit criteria; tick a phase only when the exit criteria hold.
 
 ## Phase 0: groundwork and de-risking
 
-- [ ] `go get github.com/charmbracelet/wish` (v1 line); `go mod tidy`; `go build ./...` with Bubble Tea 1.3.10 and lipgloss 1.1.0 unchanged
-- [ ] Stop and decide separately if Wish forces a Bubble Tea or lipgloss upgrade
-- [ ] Spike in the scratchpad (not committed): Wish server serving `dashtui.New` with a fake `Querier`
-- [ ] Spike: connect with `ssh -p 2222 -o StrictHostKeyChecking=no localhost`; confirm it draws, resizes and quits
-- [ ] Spike: note how colours look with the global default renderer (baseline for Phase 3)
-- [ ] Audit default-renderer colour use and finalise the list: package-level styles in `internal/dashtui/view.go`, `colorStyle`, inline `lipgloss.NewStyle()` in `header.go` and `screen.go`, `Model.input` (`bubbles/textinput`)
-- [ ] Check what the `textinput` default styles actually render
-- [ ] Confirm `internal/panel` and `internal/textutil` use only `lipgloss.Width`
-- [ ] Exit: spike works, audit list is final, no dependency conflict
+- [x] `go get github.com/charmbracelet/wish` (v1 line); `go mod tidy`; `go build ./...` with Bubble Tea 1.3.10 and lipgloss 1.1.0 unchanged
+- [x] Stop and decide separately if Wish forces a Bubble Tea or lipgloss upgrade
+- [x] Spike in the scratchpad (not committed): Wish server serving `dashtui.New` with a fake `Querier`
+- [x] Spike: connect with `ssh -p 2222 -o StrictHostKeyChecking=no localhost`; confirm it draws, resizes and quits
+- [x] Spike: note how colours look with the global default renderer (baseline for Phase 3)
+- [x] Audit default-renderer colour use and finalise the list: package-level styles in `internal/dashtui/view.go`, `colorStyle`, inline `lipgloss.NewStyle()` in `header.go` and `screen.go`, `Model.input` (`bubbles/textinput`)
+- [x] Check what the `textinput` default styles actually render
+- [x] Confirm `internal/panel` and `internal/textutil` use only `lipgloss.Width`
+- [x] Exit: spike works, audit list is final, no dependency conflict
 
 ## Phase 1: split session construction from program start
 

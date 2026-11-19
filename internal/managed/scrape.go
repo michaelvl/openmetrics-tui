@@ -27,8 +27,11 @@ type ScrapeParams struct {
 	// Namespaces overrides Scrape.Namespaces (--namespace). Empty with no
 	// Scrape means all namespaces.
 	Namespaces []string
-	// ProxyAddr is the kubectl proxy address, host:port.
+	// ProxyAddr is the kubectl proxy address, host:port. Ignored with InCluster.
 	ProxyAddr string
+	// InCluster scrapes pods directly at their pod IP, with service discovery
+	// using the pod's ServiceAccount, instead of through kubectl proxy.
+	InCluster bool
 }
 
 type scrapeFile struct {
@@ -45,7 +48,7 @@ type scrapeJob struct {
 
 type kubernetes struct {
 	Role       string       `yaml:"role"`
-	APIServer  string       `yaml:"api_server"`
+	APIServer  string       `yaml:"api_server,omitempty"`
 	Namespaces *sdNamespace `yaml:"namespaces,omitempty"`
 	Selectors  []sdSelector `yaml:"selectors,omitempty"`
 }
@@ -89,6 +92,7 @@ const (
 	lblNS    = "__meta_kubernetes_namespace"
 	lblPod   = "__meta_kubernetes_pod_name"
 	lblPort  = "__meta_kubernetes_pod_container_port_number"
+	lblIP    = "__meta_kubernetes_pod_ip"
 	lblTmp   = "__tmp_path"
 	proxyFmt = "/api/v1/namespaces/$1/pods/$2:$3/proxy"
 )
@@ -96,8 +100,11 @@ const (
 // GenerateScrapeConfig renders the VictoriaMetrics scrape config that scrapes
 // pods through kubectl proxy (see the plan, Appendix B). Every target is
 // reached at the proxy address with the pod-proxy path as its metrics path.
+// With InCluster each target is reached at its pod IP and port with the plain
+// metrics path, and discovery uses the in-pod ServiceAccount (no api_server).
+// Everything else, including the namespace, pod and instance labels, is shared.
 func GenerateScrapeConfig(p ScrapeParams) ([]byte, error) {
-	if p.ProxyAddr == "" {
+	if p.ProxyAddr == "" && !p.InCluster {
 		return nil, fmt.Errorf("proxy address is empty")
 	}
 	s := p.Scrape
@@ -109,7 +116,10 @@ func GenerateScrapeConfig(p ScrapeParams) ([]byte, error) {
 	if len(namespaces) == 0 && s != nil {
 		namespaces = s.Namespaces
 	}
-	sd := kubernetes{Role: "pod", APIServer: "http://" + p.ProxyAddr}
+	sd := kubernetes{Role: "pod"}
+	if !p.InCluster {
+		sd.APIServer = "http://" + p.ProxyAddr
+	}
 	if len(namespaces) > 0 {
 		sd.Namespaces = &sdNamespace{Names: namespaces}
 	}
@@ -132,13 +142,23 @@ func GenerateScrapeConfig(p ScrapeParams) ([]byte, error) {
 			relabelRule{SourceLabels: []string{portLbl}, Action: "keep", Regex: rx(".+")},
 			relabelRule{SourceLabels: []string{metaAnnotation(pathAnn)}, Regex: rx("(.+)"), TargetLabel: lblTmp},
 			relabelRule{SourceLabels: []string{lblTmp}, Regex: rx(""), Replacement: defaultPath, TargetLabel: lblTmp},
-			relabelRule{
-				SourceLabels: []string{lblNS, lblPod, portLbl, lblTmp},
-				Regex:        rx("(.+);(.+);(.+);(.+)"),
-				Replacement:  "/api/v1/namespaces/$1/pods/$2:$3/proxy$4",
-				TargetLabel:  "__metrics_path__",
-			},
 		)
+		if p.InCluster {
+			rules = append(rules,
+				relabelRule{SourceLabels: []string{lblTmp}, TargetLabel: "__metrics_path__"},
+				relabelRule{SourceLabels: []string{lblIP, portLbl}, Regex: rx("(.+);(.+)"), Replacement: "$1:$2", TargetLabel: "__address__"},
+			)
+		} else {
+			rules = append(rules,
+				relabelRule{
+					SourceLabels: []string{lblNS, lblPod, portLbl, lblTmp},
+					Regex:        rx("(.+);(.+);(.+);(.+)"),
+					Replacement:  "/api/v1/namespaces/$1/pods/$2:$3/proxy$4",
+					TargetLabel:  "__metrics_path__",
+				},
+				relabelRule{TargetLabel: "__address__", Replacement: p.ProxyAddr},
+			)
+		}
 	default:
 		if s != nil && s.Selector != "" {
 			sd.Selectors = []sdSelector{{Role: "pod", Label: s.Selector}}
@@ -148,16 +168,32 @@ func GenerateScrapeConfig(p ScrapeParams) ([]byte, error) {
 			path = s.Path
 		}
 		path = strings.ReplaceAll(path, "$", "$$")
-		if s != nil && s.Port != "" {
+		port := ""
+		if s != nil {
+			port = strings.ReplaceAll(s.Port, "$", "$$")
+		}
+		switch {
+		case p.InCluster && port != "":
+			rules = append(rules,
+				relabelRule{TargetLabel: "__metrics_path__", Replacement: path},
+				relabelRule{SourceLabels: []string{lblIP}, Regex: rx("(.+)"), Replacement: "$1:" + port, TargetLabel: "__address__"},
+			)
+		case p.InCluster:
+			rules = append(rules,
+				relabelRule{SourceLabels: []string{lblPort}, Action: "keep", Regex: rx(".+")},
+				relabelRule{TargetLabel: "__metrics_path__", Replacement: path},
+				relabelRule{SourceLabels: []string{lblIP, lblPort}, Regex: rx("(.+);(.+)"), Replacement: "$1:$2", TargetLabel: "__address__"},
+			)
+		case port != "":
 			// One fixed port: containers that each declare it give identical
 			// targets, which VictoriaMetrics collapses into one.
 			rules = append(rules, relabelRule{
 				SourceLabels: []string{lblNS, lblPod},
 				Regex:        rx("(.+);(.+)"),
-				Replacement:  "/api/v1/namespaces/$1/pods/$2:" + s.Port + "/proxy" + path,
+				Replacement:  "/api/v1/namespaces/$1/pods/$2:" + port + "/proxy" + path,
 				TargetLabel:  "__metrics_path__",
-			})
-		} else {
+			}, relabelRule{TargetLabel: "__address__", Replacement: p.ProxyAddr})
+		default:
 			// Every declared container port is a target; pods without one are skipped.
 			rules = append(rules,
 				relabelRule{SourceLabels: []string{lblPort}, Action: "keep", Regex: rx(".+")},
@@ -166,11 +202,11 @@ func GenerateScrapeConfig(p ScrapeParams) ([]byte, error) {
 					Regex:        rx("(.+);(.+);(.+)"),
 					Replacement:  proxyFmt + path,
 					TargetLabel:  "__metrics_path__",
-				})
+				},
+				relabelRule{TargetLabel: "__address__", Replacement: p.ProxyAddr})
 		}
 	}
 	rules = append(rules,
-		relabelRule{TargetLabel: "__address__", Replacement: p.ProxyAddr},
 		relabelRule{SourceLabels: []string{lblNS}, TargetLabel: "namespace"},
 		relabelRule{SourceLabels: []string{lblPod}, TargetLabel: "pod"},
 	)
@@ -186,8 +222,12 @@ func GenerateScrapeConfig(p ScrapeParams) ([]byte, error) {
 		rules = append(rules, relabelRule{Regex: rx(lblTmp), Action: "labeldrop"})
 	}
 
+	job := "pods-via-proxy"
+	if p.InCluster {
+		job = "pods"
+	}
 	out := scrapeFile{ScrapeConfigs: []scrapeJob{{
-		JobName:        "pods-via-proxy",
+		JobName:        job,
 		ScrapeInterval: fmt.Sprintf("%ds", int(interval.Seconds())),
 		Scheme:         "http",
 		KubernetesSD:   []kubernetes{sd},

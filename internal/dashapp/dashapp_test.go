@@ -235,3 +235,37 @@ func TestSSHFlagValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintScrapeConfig(t *testing.T) {
+	path := writeDash(t, "title: T\nscrape:\n  namespaces: [prod]\n  selector: app=foo\npanels:\n  - title: P\n    query: up\n")
+	code, out, errOut := run("--print-scrape-config", path)
+	if code != 0 || errOut != "" {
+		t.Fatalf("code %d, stderr %q", code, errOut)
+	}
+	for _, want := range []string{"names: [prod]", "label: app=foo", "__meta_kubernetes_pod_ip"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "api_server") {
+		t.Errorf("in-cluster config has api_server:\n%s", out)
+	}
+	// --namespace overrides the dashboard, and the path is optional.
+	_, out, _ = run("--print-scrape-config", "--namespace", "other", path)
+	if !strings.Contains(out, "names: [other]") {
+		t.Errorf("--namespace not applied:\n%s", out)
+	}
+	if code, out, _ = run("--print-scrape-config"); code != 0 || !strings.Contains(out, "role: pod") {
+		t.Errorf("without a dashboard: code %d\n%s", code, out)
+	}
+}
+
+func TestPrintScrapeConfigExclusive(t *testing.T) {
+	path := writeDash(t, dash)
+	for _, extra := range [][]string{{"--managed"}, {"--prom", "http://x"}, {"--check"}, {"--var", "ns=a"}, {"--ssh-listen", ":0"}, {"--data-dir", "x"}} {
+		code, out, errOut := run(append([]string{"--print-scrape-config"}, append(extra, path)...)...)
+		if code != 2 || out != "" || !strings.Contains(errOut, extra[0]) {
+			t.Errorf("%v: code %d, stdout %q, stderr %q", extra, code, out, errOut)
+		}
+	}
+}

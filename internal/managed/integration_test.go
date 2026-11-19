@@ -2,17 +2,24 @@ package managed
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/michaelvl/openmetrics-tui/internal/dashboard"
+	"github.com/michaelvl/openmetrics-tui/internal/managed/fakebin"
 	"github.com/michaelvl/openmetrics-tui/internal/promapi"
 )
 
@@ -256,4 +263,136 @@ func TestIntegrationFakeKubernetes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestIntegrationInClusterTargets runs the in-cluster scrape config in a real
+// victoria-metrics against the fake Kubernetes API. Outside a cluster the config
+// needs an api_server, so the test adds the fake's address. The fake's pods have
+// the unroutable IP 10.0.0.1, so the scrapes fail, but VictoriaMetrics still
+// lists each target with its address, path and labels, and records up=0 for it.
+// Real in-cluster discovery is checked on kind (docs/TODO-ssh.md, Phase 4c).
+func TestIntegrationInClusterTargets(t *testing.T) {
+	vmBin := needVM(t)
+	api := httptest.NewServer(fakebin.KubeAPI())
+	t.Cleanup(api.Close)
+
+	cases := []struct {
+		name   string
+		scrape dashboard.Scrape
+		want   map[string]string // instance label to scrape URL
+	}{
+		{
+			name: "annotation",
+			scrape: dashboard.Scrape{Namespaces: []string{"prod"}, Interval: time.Second,
+				Annotation: "prometheus.io/scrape", Port: "prometheus.io/port", Path: "prometheus.io/path"},
+			want: map[string]string{
+				"pod-a": "http://10.0.0.1:9100/custom",
+				"pod-b": "http://10.0.0.1:9101/metrics",
+				"pod-e": "http://10.0.0.1:9103/metrics",
+				"pod-f": "http://10.0.0.1:9105/metrics",
+			},
+		},
+		{
+			name:   "selector declared ports",
+			scrape: dashboard.Scrape{Namespaces: []string{"prod"}, Interval: time.Second, Selector: "app=foo"},
+			want: map[string]string{
+				"pod-a:9100": "http://10.0.0.1:9100/metrics",
+				"pod-b:9101": "http://10.0.0.1:9101/metrics",
+				"pod-c:8080": "http://10.0.0.1:8080/metrics",
+			},
+		},
+		{
+			name: "selector fixed port",
+			scrape: dashboard.Scrape{Namespaces: []string{"prod"}, Interval: time.Second,
+				Selector: "app=foo", Port: "7000", Path: "/stats"},
+			want: map[string]string{
+				"pod-a": "http://10.0.0.1:7000/stats",
+				"pod-b": "http://10.0.0.1:7000/stats",
+				"pod-c": "http://10.0.0.1:7000/stats",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := GenerateScrapeConfig(ScrapeParams{Scrape: &tc.scrape, InCluster: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cfg scrapeFile
+			if err := yaml.Unmarshal(data, &cfg); err != nil {
+				t.Fatal(err)
+			}
+			cfg.ScrapeConfigs[0].KubernetesSD[0].APIServer = api.URL
+			data, err = yaml.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfgPath := filepath.Join(t.TempDir(), "scrape.yml")
+			if err := os.WriteFile(cfgPath, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			addr, err := freeAddr()
+			if err != nil {
+				t.Fatal(err)
+			}
+			lb := NewLogBuffer(100, nil)
+			c, err := startChild("vm", vmBin, []string{"-promscrape.config=" + cfgPath, "-storageDataPath=" + t.TempDir(),
+				"-httpListenAddr=" + addr, "-retentionPeriod=24h", "-search.latencyOffset=0"}, nil, lb, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { c.stop(5 * time.Second) })
+			t.Cleanup(func() {
+				if t.Failed() {
+					t.Logf("vm logs:\n%s", strings.Join(lb.Lines(), "\n"))
+				}
+			})
+			if err := c.waitReady(ctx(t), 30*time.Second, func(x context.Context) error { return httpOK(x, "http://"+addr+"/health") }); err != nil {
+				t.Fatal(err)
+			}
+
+			var got map[string]string
+			poll(t, "all expected targets discovered", func() bool {
+				got = activeTargets(t, addr)
+				return len(got) >= len(tc.want)
+			})
+			time.Sleep(3 * time.Second) // give unexpected targets time to show up
+			got = activeTargets(t, addr)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("targets %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// activeTargets maps the instance label of every active target at the
+// victoria-metrics at addr to its scrape URL, and fails the test on a target
+// whose job, namespace or pod label is wrong.
+func activeTargets(t *testing.T, addr string) map[string]string {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + "/api/v1/targets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var body struct {
+		Data struct {
+			ActiveTargets []struct {
+				ScrapeURL string            `json:"scrapeUrl"`
+				Labels    map[string]string `json:"labels"`
+			} `json:"activeTargets"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, tg := range body.Data.ActiveTargets {
+		l := tg.Labels
+		if l["namespace"] != "prod" || l["pod"] == "" || l["job"] != "pods" {
+			t.Errorf("labels %v", l)
+		}
+		out[l["instance"]] = tg.ScrapeURL
+	}
+	return out
 }

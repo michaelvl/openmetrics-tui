@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: omtui-dash
+  namespace: omtui
+spec:
+  type: ClusterIP
+  # type: LoadBalancer   # to reach it from outside the cluster
+  selector: {app: omtui-dash}
+  ports:
+    - {name: ssh, port: 2222, targetPort: ssh}

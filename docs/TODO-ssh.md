@@ -83,19 +83,21 @@ and its exit criteria; tick a phase only when the exit criteria hold.
 
 ### 4a. In-cluster scrape config
 
-- [ ] `internal/managed/scrape.go`: `ScrapeParams.InCluster`; no `api_server`; `__address__` is `<pod_ip>:<port>`; plain `__metrics_path__` instead of the pod-proxy rewrite
-- [ ] Keep Running filter, namespace and selector handling, annotation mode, and the `namespace`, `pod`, `instance` labels identical to the proxy variant
-- [ ] `--print-scrape-config` flag: prints the in-cluster config and exits 0; needs no backend or cluster; usable only with the dashboard path and `--namespace`
-- [ ] Golden tests for default, selector, fixed port, annotation mode, namespaces
-- [ ] Test that the two variants differ only in addressing and path labels
-- [ ] Verify against real VictoriaMetrics using the existing fake Kubernetes API as `api_server`
+- [x] `internal/managed/scrape.go`: `ScrapeParams.InCluster`; no `api_server`; `__address__` is `<pod_ip>:<port>`; plain `__metrics_path__` instead of the pod-proxy rewrite
+- [x] Keep Running filter, namespace and selector handling, annotation mode, and the `namespace`, `pod`, `instance` labels identical to the proxy variant
+- [x] `--print-scrape-config` flag: prints the in-cluster config and exits 0; needs no backend or cluster; usable only with the dashboard path and `--namespace`
+- [x] Golden tests for default, selector, fixed port, annotation mode, namespaces
+- [x] Test that the two variants differ only in addressing and path labels
+- [x] Verify against real VictoriaMetrics using the existing fake Kubernetes API as `api_server`
 
 ### 4b. Image and manifests
+
+Files are written but not built or applied: this machine has no docker, podman or kubectl. Only the Makefile target was run. The `omtui-dash` memory and CPU in the Deployment were measured at 20 sessions (peak RSS 85 MB); the VictoriaMetrics numbers are estimates, so the resources item stays unticked.
 
 - [ ] `Dockerfile` for `omtui-dash` only: multi-stage, `CGO_ENABLED=0`, distroless or scratch, non-root
 - [ ] `examples/ssh/`: Deployment with two containers (pinned `victoriametrics/victoria-metrics` with `-promscrape.config`, `-retentionPeriod=24h`, `-search.latencyOffset=0`, `emptyDir`; and `omtui-dash --prom http://localhost:8428 --ssh-listen :2222 ...`)
 - [ ] ConfigMaps for the dashboard and the generated scrape config
-- [ ] Makefile target regenerating the scrape ConfigMap with `--print-scrape-config`
+- [x] Makefile target regenerating the scrape ConfigMap with `--print-scrape-config`
 - [ ] Secrets for the host key and the authorized keys
 - [ ] ServiceAccount, Role/RoleBinding (and a ClusterRole variant) with `list` and `watch` on `pods` only
 - [ ] Service (ClusterIP; LoadBalancer as a commented option)
@@ -103,6 +105,8 @@ and its exit criteria; tick a phase only when the exit criteria hold.
 - [ ] Resource requests and limits from a short test at the session cap
 
 ### 4c. Verify on kind
+
+Not done: no container runtime (docker or podman) and no `kubectl` here, so kind cannot create a cluster. Run `make kind-up ssh-example-keys ssh-image`, then the steps below.
 
 - [ ] Apply the example on the `docs/kubernetes-local.md` kind setup with the demo workloads
 - [ ] Pods are discovered and scraped; panels fill

@@ -5,7 +5,7 @@ DASH_HTTP_PORT=8099
 DASH_BINARY_NAME=omtui-dash
 KIND_CLUSTER=omtui
 
-.PHONY: all build tui dash test lint fmt clean run run-dash check-example mock-server screenshot kind-up kind-down kind-dash
+.PHONY: all build tui dash test lint fmt clean run run-dash check-example mock-server screenshot kind-up kind-down kind-dash ssh-scrape-config ssh-example-keys ssh-image
 
 all: build mock-server
 
@@ -71,3 +71,20 @@ kind-down:
 # Run the dashboard in managed mode against the kind cluster.
 kind-dash: dash
 	./$(DASH_BINARY_NAME) --managed --kube-context kind-$(KIND_CLUSTER) examples/kind-dashboard.yaml
+
+# Regenerate the sidecar's scrape config from the example dashboard. It is the
+# in-cluster variant: pods are scraped directly, not through the API server.
+ssh-scrape-config: dash
+	./$(DASH_BINARY_NAME) --print-scrape-config examples/ssh/dashboard.yaml > examples/ssh/scrape.yml
+
+# Create the host key and authorized_keys Secrets' source files for
+# examples/ssh (authorized_keys is your own public key). Never commit them.
+ssh-example-keys:
+	mkdir -p examples/ssh/secrets
+	test -f examples/ssh/secrets/host_key || ssh-keygen -q -t ed25519 -N '' -C omtui-dash -f examples/ssh/secrets/host_key
+	cat $(HOME)/.ssh/id_ed25519.pub > examples/ssh/secrets/authorized_keys
+
+# Build the container image (omtui-dash only) and load it into the kind cluster.
+ssh-image:
+	docker build -t omtui-dash:dev .
+	kind load docker-image omtui-dash:dev --name $(KIND_CLUSTER)

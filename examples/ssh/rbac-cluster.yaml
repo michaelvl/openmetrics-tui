@@ -1,0 +1,28 @@
+# Alternative to rbac.yaml: discover pods in every namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: omtui-dash
+  namespace: omtui
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: omtui-dash
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: omtui-dash
+subjects:
+  - kind: ServiceAccount
+    name: omtui-dash
+    namespace: omtui
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: omtui-dash

@@ -87,6 +87,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("omtui-dash", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cfg := config{vars: varFlags{}}
+	var printScrape bool
 	fs.BoolVar(&cfg.check, "check", false, "validate the dashboard and run every query once, then exit")
 	fs.Var(cfg.vars, "var", "set a variable, `name=value` (repeatable)")
 	fs.StringVar(&cfg.promURL, "prom", "", "Prometheus-compatible API `URL` (overrides datasource.url)")
@@ -108,6 +109,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&cfg.ssh.AuthKeysPath, "ssh-authorized-keys", "", "OpenSSH authorized_keys `file` listing who may connect; re-read on every connection")
 	fs.BoolVar(&cfg.ssh.AllowAnyKey, "ssh-allow-any-key", false, "let any public key connect (only for non-sensitive metrics)")
 	fs.IntVar(&cfg.ssh.MaxSessions, "ssh-max-sessions", 20, "maximum number of concurrent SSH sessions")
+	fs.BoolVar(&printScrape, "print-scrape-config", false, "print the in-cluster VictoriaMetrics scrape config for the dashboard and --namespace, then exit")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(stderr, "Usage: omtui-dash [flags] dashboard.yaml\n\nFlags:\n")
 		fs.PrintDefaults()
@@ -119,6 +121,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	if printScrape {
+		return printScrapeConfig(fs, &cfg, stdout, stderr)
+	}
 	if cfg.promURL != "" && cfg.managed {
 		_, _ = fmt.Fprintln(stderr, "omtui-dash: --prom and --managed are mutually exclusive")
 		return 2
@@ -188,6 +193,46 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "omtui-dash: %v\n", err)
 		return 1
 	}
+	return 0
+}
+
+// printScrapeConfig prints the in-cluster scrape config, the source for the
+// sidecar's ConfigMap. It needs no backend or cluster, so only the dashboard
+// path (optional) and --namespace may accompany it.
+func printScrapeConfig(fs *flag.FlagSet, cfg *config, stdout, stderr io.Writer) int {
+	var bad []string
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name != "print-scrape-config" && f.Name != "namespace" {
+			bad = append(bad, "--"+f.Name)
+		}
+	})
+	if len(bad) > 0 {
+		_, _ = fmt.Fprintf(stderr, "omtui-dash: --print-scrape-config cannot be combined with %s\n", strings.Join(bad, ", "))
+		return 2
+	}
+	if fs.NArg() > 1 {
+		fs.Usage()
+		return 2
+	}
+	var scrape *dashboard.Scrape
+	if fs.NArg() == 1 {
+		path := fs.Arg(0)
+		d, err := dashboard.Load(path)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+		for _, w := range d.Warnings {
+			_, _ = fmt.Fprintf(stderr, "%s:%d: warning: %s\n", path, w.Line, w.Msg)
+		}
+		scrape = d.Scrape
+	}
+	out, err := managed.GenerateScrapeConfig(managed.ScrapeParams{Scrape: scrape, Namespaces: cfg.mopts.Namespaces, InCluster: true})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "omtui-dash: %v\n", err)
+		return 1
+	}
+	_, _ = stdout.Write(out)
 	return 0
 }
 

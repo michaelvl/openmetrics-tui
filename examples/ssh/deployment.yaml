@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omtui-dash
+  namespace: omtui
+spec:
+  replicas: 1 # one sidecar store per pod; more replicas scrape everything again
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: omtui-dash}
+  template:
+    metadata:
+      labels: {app: omtui-dash}
+    spec:
+      serviceAccountName: omtui-dash
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: victoria-metrics
+          image: victoriametrics/victoria-metrics:v1.156.0
+          args:
+            - -promscrape.config=/scrape/scrape.yml
+            - -storageDataPath=/vm-data
+            # Not only loopback: the kubelet probes the pod IP. This exposes the
+            # query API inside the cluster without SSH auth; add a NetworkPolicy
+            # that admits only the kubelet if that matters.
+            - -httpListenAddr=:8428
+            - -retentionPeriod=24h
+            - -search.latencyOffset=0 # show the newest samples at once
+          volumeMounts:
+            - {name: scrape, mountPath: /scrape, readOnly: true}
+            - {name: vm-data, mountPath: /vm-data}
+          readinessProbe:
+            httpGet: {path: /health, port: 8428}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          # An estimate, not measured: a small cluster's worth of series.
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+        - name: omtui-dash
+          # Build it with `make ssh-image`; on kind: kind load docker-image omtui-dash:dev --name omtui
+          image: omtui-dash:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - --prom=http://localhost:8428
+            - --ssh-listen=:2222
+            - --ssh-host-key=/keys/host_key
+            - --ssh-authorized-keys=/auth/authorized_keys
+            - --ssh-max-sessions=20
+            - /dash/dashboard.yaml
+          ports:
+            - {name: ssh, containerPort: 2222}
+          volumeMounts:
+            - {name: dashboard, mountPath: /dash, readOnly: true}
+            - {name: host-key, mountPath: /keys, readOnly: true}
+            - {name: authorized-keys, mountPath: /auth, readOnly: true}
+          readinessProbe:
+            tcpSocket: {port: ssh}
+          livenessProbe:
+            tcpSocket: {port: ssh}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          # Measured: peak RSS 85 MB with 20 concurrent sessions (the default cap)
+          # against the mock server; about 0.25 CPU while they connected.
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {memory: 256Mi}
+      volumes:
+        - name: scrape
+          configMap: {name: omtui-scrape}
+        - name: dashboard
+          configMap: {name: omtui-dashboard}
+        - name: vm-data
+          emptyDir: {} # history is lost when the pod restarts
+        - name: host-key
+          secret:
+            secretName: omtui-host-key
+            defaultMode: 0440 # group-readable for fsGroup; the key stays out of the image
+        - name: authorized-keys
+          secret: {secretName: omtui-authorized-keys}

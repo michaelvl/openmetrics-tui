@@ -186,6 +186,10 @@ func vm(args []string) int {
 	})
 }
 
+// KubeAPI returns the fake pod API for tests that talk to it directly, for
+// example as the api_server of an in-cluster scrape config.
+func KubeAPI() http.Handler { return kubeAPI() }
+
 type obj = map[string]any
 
 func pod(name string, ann, labels obj, phase string, containers ...[]int) obj {

@@ -1,0 +1,27 @@
+scrape_configs:
+    - job_name: pods
+      scrape_interval: 15s
+      scheme: http
+      kubernetes_sd_configs:
+        - role: pod
+          namespaces:
+            names: [prod]
+          selectors:
+            - role: pod
+              label: app=foo
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_phase]
+          action: keep
+          regex: Running
+        - replacement: /stats/prom
+          target_label: __metrics_path__
+        - source_labels: [__meta_kubernetes_pod_ip]
+          regex: (.+)
+          replacement: $1:8080
+          target_label: __address__
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: instance

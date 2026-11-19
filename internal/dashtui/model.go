@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/michaelvl/openmetrics-tui/internal/dashboard"
 	"github.com/michaelvl/openmetrics-tui/internal/managed"
@@ -52,6 +53,10 @@ type Options struct {
 	// NoSnapshot disables the S key and hides its help line, for sessions
 	// with no meaningful local filesystem.
 	NoSnapshot bool
+	// Renderer styles the session; nil means lipgloss's default renderer. A
+	// server gives each client its own, so colours follow that client's
+	// terminal.
+	Renderer *lipgloss.Renderer
 	// HTTPPort, when non-zero, serves GET /screenshot and POST
 	// /variables/<name> on that loopback port.
 	HTTPPort int
@@ -163,7 +168,9 @@ type Model struct {
 	// input is the one text field shared by the variable boxes and the row
 	// filter; edit says who owns it.
 	input textinput.Model
-	edit  editState
+	// th holds the session's styles.
+	th   *theme
+	edit editState
 	// lookups caches label_values results for lookupTTL.
 	lookups map[string]cachedLookup
 
@@ -214,10 +221,23 @@ func New(opts Options) *Model {
 	// A static cursor keeps the input out of the message loop: a blinking one
 	// would need cursor.BlinkMsg plumbed through Update, as the existing tool
 	// also avoids.
+	r := opts.Renderer
+	if r == nil {
+		r = lipgloss.DefaultRenderer()
+	}
+	th := newTheme(r)
 	in := textinput.New()
 	in.Prompt = ""
 	in.CharLimit = 256
 	in.Cursor.SetMode(cursor.CursorStatic)
+	// Zero styles would render through the default renderer; the cursor block
+	// is a reversed style, so it needs the session's.
+	in.TextStyle = r.NewStyle()
+	in.PromptStyle = r.NewStyle()
+	in.PlaceholderStyle = r.NewStyle().Foreground(lipgloss.Color("240"))
+	in.CompletionStyle = r.NewStyle().Foreground(lipgloss.Color("240"))
+	in.Cursor.Style = r.NewStyle()
+	in.Cursor.TextStyle = r.NewStyle()
 
 	m := &Model{
 		d:        d,
@@ -236,6 +256,7 @@ func New(opts Options) *Model {
 		height:   24,
 		rootCtx:  root,
 		input:    in,
+		th:       th,
 		lookups:  map[string]cachedLookup{},
 	}
 	if m.interval <= 0 {

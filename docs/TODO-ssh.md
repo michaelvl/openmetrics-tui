@@ -50,34 +50,34 @@ and its exit criteria; tick a phase only when the exit criteria hold.
 
 ### 3a. Theme
 
-- [ ] `internal/dashtui/theme.go`: `theme` struct holding a `*lipgloss.Renderer` and the styles `faint`, `err`, `warn`, `ok`, `accent`, `title`, `dashTitle`
-- [ ] `newTheme(r)` builds every style with `r.NewStyle()`
-- [ ] Methods `color(name)` (was `colorStyle`) and `box()`
-- [ ] `Options.Renderer`; `New` falls back to `lipgloss.DefaultRenderer()` and sets `m.th`
+- [x] `internal/dashtui/theme.go`: `theme` struct holding a `*lipgloss.Renderer` and the styles `faint`, `err`, `warn`, `ok`, `accent`, `title`, `dashTitle`
+- [x] `newTheme(r)` builds every style with `r.NewStyle()`
+- [x] Methods `color(name)` (was `colorStyle`) and `box()`
+- [x] `Options.Renderer`; `New` falls back to `lipgloss.DefaultRenderer()` and sets `m.th`
 
 ### 3b. Call sites
 
-- [ ] Delete the package-level style vars in `view.go`; let the compiler list the call sites
-- [ ] `footer.go`: switch to `m.th.*`
-- [ ] `screen.go`: switch to `m.th.*`; help overlay box and `lipgloss.Place` whitespace styles from `m.th.r`
-- [ ] `view.go`: switch to `m.th.*`
-- [ ] `header.go`: variable boxes, suggestion box, `boxTop` and helpers take the theme or become `Model` methods
-- [ ] `Model.input` (`textinput`): styles from `m.th.r` if the audit showed they render anything
-- [ ] Threshold colour names still go through `th.color`
-- [ ] Snapshot and screenshot output (ANSI stripped) is byte-identical
+- [x] Delete the package-level style vars in `view.go`; let the compiler list the call sites
+- [x] `footer.go`: switch to `m.th.*`
+- [x] `screen.go`: switch to `m.th.*`; help overlay box and `lipgloss.Place` whitespace styles from `m.th.r`
+- [x] `view.go`: switch to `m.th.*`
+- [x] `header.go`: variable boxes, suggestion box, `boxTop` and helpers take the theme or become `Model` methods
+- [x] `Model.input` (`textinput`): styles from `m.th.r` if the audit showed they render anything
+- [x] Threshold colour names still go through `th.color`
+- [x] Snapshot and screenshot output (ANSI stripped) is byte-identical
 
 ### 3c. SSH wiring
 
-- [ ] In the Phase 2 handler: `r := bubbletea.MakeRenderer(sess)`; pass as `Options.Renderer`
-- [ ] Do not set `tea.WithInput` or `tea.WithOutput` again (Wish sets them)
+- [x] In the Phase 2 handler: `r := bubbletea.MakeRenderer(sess)`; pass as `Options.Renderer`
+- [x] Do not set `tea.WithInput` or `tea.WithOutput` again (Wish sets them)
 
 ### 3d. Tests
 
-- [ ] Unit: render a model view for each `termenv` profile (`Ascii`, `ANSI`, `ANSI256`, `TrueColor`) using `lipgloss.NewRenderer(io.Discard)`; `Ascii` has no colour sequences, `ANSI256` contains `38;5;`
-- [ ] Unit: two models with different renderers in one process do not affect each other
-- [ ] Existing view goldens pass unchanged
-- [ ] SSH integration: two PTY requests, `TERM=xterm-256color` and `TERM=dumb`; first frame coloured, second plain
-- [ ] Exit: two simultaneous clients with different `TERM` both look right; server with stdout on `/dev/null` still colours a 256-colour client; no use of the removed globals remains
+- [x] Unit: render a model view for each `termenv` profile (`Ascii`, `ANSI`, `ANSI256`, `TrueColor`) using `lipgloss.NewRenderer(io.Discard)`; `Ascii` has no colour sequences, `ANSI256` contains `38;5;`
+- [x] Unit: two models with different renderers in one process do not affect each other
+- [x] Existing view goldens pass unchanged
+- [x] SSH integration: two PTY requests, `TERM=xterm-256color` and `TERM=dumb`; first frame coloured, second plain
+- [x] Exit: two simultaneous clients with different `TERM` both look right; server with stdout on `/dev/null` still colours a 256-colour client; no use of the removed globals remains
 
 ## Phase 4: container and sidecar deployment
 

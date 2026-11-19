@@ -18,6 +18,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/ssh"
+	"github.com/charmbracelet/wish/bubbletea"
 
 	"github.com/michaelvl/openmetrics-tui/internal/dashboard"
 	"github.com/michaelvl/openmetrics-tui/internal/dashtui"
@@ -240,9 +241,12 @@ func serveSSH(ctx context.Context, cfg *config, d *dashboard.Dashboard, vals map
 	cfg.ssh.OnListen = func(addr net.Addr, fingerprint string) {
 		_, _ = fmt.Fprintf(stderr, "omtui-dash: serving SSH on %s, host key %s\n", addr, fingerprint)
 	}
-	newModel := func(ctx context.Context, _ ssh.Session) (tea.Model, []tea.ProgramOption) {
+	newModel := func(ctx context.Context, sess ssh.Session) (tea.Model, []tea.ProgramOption) {
+		// The renderer takes its colour profile from the client's TERM, not the
+		// server's stdout. Wish sets the program's input and output itself.
 		m := dashtui.NewSession(ctx, dashtui.Options{
 			Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode, URL: be.url, NoSnapshot: true,
+			Renderer: bubbletea.MakeRenderer(sess),
 		})
 		return m, []tea.ProgramOption{tea.WithAltScreen()}
 	}

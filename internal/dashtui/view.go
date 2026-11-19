@@ -39,29 +39,6 @@ const (
 	colTitle  = "#7aa2f7" // Tokyo Night blue, for the dashboard title
 )
 
-var (
-	faintStyle     = lipgloss.NewStyle().Faint(true)
-	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color(colRed))
-	warnStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colYellow))
-	okStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color(colGreen))
-	accentStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
-	titleStyle     = lipgloss.NewStyle().Bold(true)
-	dashTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colTitle))
-)
-
-// colorStyle maps a threshold colour name to a style. Names outside the usual
-// three are passed to lipgloss as they are, which accepts ANSI numbers and hex.
-func colorStyle(name string) lipgloss.Style {
-	c := map[string]string{
-		"red": colRed, "yellow": colYellow, "green": colGreen, "orange": "#ff9e64",
-		"blue": "33", "purple": "135", "cyan": "86", "grey": "244", "gray": "244",
-	}[name]
-	if c == "" {
-		c = name
-	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(c))
-}
-
 // bodyHeight is the rows available to panels: everything but the header, the
 // footer and any banner.
 func (m *Model) bodyHeight() int {
@@ -210,10 +187,10 @@ func (p *panelState) thresholdLabel(t dashboard.Threshold) string {
 
 // legend is the threshold legend for the title row: a coloured marker and the
 // comparison for each rule, in rule order (first match wins).
-func (p *panelState) legend() string {
+func (m *Model) legend(p *panelState) string {
 	var parts []string
 	for _, t := range p.def.Thresholds {
-		parts = append(parts, colorStyle(t.Color).Render(t.Marker())+p.thresholdLabel(t))
+		parts = append(parts, m.th.color(t.Color).Render(t.Marker())+p.thresholdLabel(t))
 	}
 	return strings.Join(parts, "  ")
 }
@@ -276,7 +253,7 @@ func (m *Model) rebuild() {
 func (m *Model) buildLines() (lines []string, titleLine []int) {
 	g := m.computeGrid()
 	m.shownWindows = g.cols
-	rule := faintStyle.Render(" " + strings.Repeat("─", max(0, m.width-2)))
+	rule := m.th.faint.Render(" " + strings.Repeat("─", max(0, m.width-2)))
 	lines = append(lines, rule)
 
 	tw := 0
@@ -296,13 +273,13 @@ func (m *Model) buildLines() (lines []string, titleLine []int) {
 		lines = append(lines, m.titleRow(p, active))
 		switch {
 		case p.err != nil:
-			lines = append(lines, "   "+errStyle.Render(oneLine(p.err.Error(), m.width-4)))
+			lines = append(lines, "   "+m.th.err.Render(oneLine(p.err.Error(), m.width-4)))
 		case !p.loaded:
-			lines = append(lines, "   "+faintStyle.Render("loading…"))
+			lines = append(lines, "   "+m.th.faint.Render("loading…"))
 		case len(p.rows) == 0:
-			lines = append(lines, "   "+warnStyle.Render(noDataMsg))
+			lines = append(lines, "   "+m.th.warn.Render(noDataMsg))
 		case len(p.shown) == 0:
-			lines = append(lines, "   "+faintStyle.Render("no rows match the filter"))
+			lines = append(lines, "   "+m.th.faint.Render("no rows match the filter"))
 		default:
 			lines = append(lines, m.columnHeader(g))
 			for _, r := range p.shown {
@@ -338,12 +315,12 @@ func padRight(s string, w int) string {
 }
 
 func (m *Model) titleRow(p *panelState, active bool) string {
-	left := activeCue(active) + "▾ " + styleTitle(p.title(), active)
+	left := m.activeCue(active) + "▾ " + m.styleTitle(p.title(), active)
 	var right []string
 	if note := m.coldNote(p); note != "" {
-		right = append(right, warnStyle.Render(note))
+		right = append(right, m.th.warn.Render(note))
 	}
-	if leg := p.legend(); leg != "" && p.err == nil {
+	if leg := m.legend(p); leg != "" && p.err == nil {
 		right = append(right, leg)
 	}
 	return joinEnds(left, right, m.width)
@@ -351,18 +328,18 @@ func (m *Model) titleRow(p *panelState, active bool) string {
 
 // activeCue is the first column of a title row: a bar for the active panel. It
 // is a character, not just a colour, so it survives colourless output.
-func activeCue(active bool) string {
+func (m *Model) activeCue(active bool) string {
 	if active {
-		return accentStyle.Render("▌")
+		return m.th.accent.Render("▌")
 	}
 	return " "
 }
 
-func styleTitle(t string, active bool) string {
+func (m *Model) styleTitle(t string, active bool) string {
 	if active {
-		return accentStyle.Inherit(titleStyle).Render(t)
+		return m.th.accent.Inherit(m.th.title).Render(t)
 	}
-	return titleStyle.Render(t)
+	return m.th.title.Render(t)
 }
 
 // joinEnds puts left at the start of a line and as many of the right-hand
@@ -387,13 +364,13 @@ func (m *Model) columnHeader(g grid) string {
 	if g.trend > 0 {
 		b.WriteString(strings.Repeat(" ", colSep+1) + "trend (" + model.Duration(m.d.Spark).String() + ")")
 	}
-	return faintStyle.Render(b.String())
+	return m.th.faint.Render(b.String())
 }
 
 func (m *Model) rowLine(p *panelState, r panel.Row, g grid, active bool) string {
 	gutter := " "
 	if active {
-		gutter = faintStyle.Render("│")
+		gutter = m.th.faint.Render("│")
 	}
 	label := padRight(textutil.TruncateToWidth(r.Title, g.labelW), g.labelW)
 	b := " " + gutter + " " + label
@@ -401,28 +378,28 @@ func (m *Model) rowLine(p *panelState, r panel.Row, g grid, active bool) string 
 		c := m.cellFor(p, r.Cells[wi])
 		txt, w := c.text, c.width()
 		if c.color != "" {
-			txt = colorStyle(c.color).Render(c.text + c.symbol)
+			txt = m.th.color(c.color).Render(c.text + c.symbol)
 		}
 		b += strings.Repeat(" ", colSep) + txt + strings.Repeat(" ", max(0, g.colW[k]-w))
 	}
 	if g.trend > 0 {
 		spark := panel.Sparkline(r.Spark, g.trend)
-		style := lipgloss.NewStyle()
+		style := m.th.r.NewStyle()
 		if nowColor := panel.Color(p.def.Thresholds, r.Now(m.d.Windows)); nowColor != "" {
-			style = colorStyle(nowColor)
+			style = m.th.color(nowColor)
 		}
-		b += strings.Repeat(" ", colSep+1) + renderSpark(spark, style)
+		b += strings.Repeat(" ", colSep+1) + m.renderSpark(spark, style)
 	}
 	return b
 }
 
 // renderSpark styles the data cells of a sparkline and fades the runs of
 // missing cells, so the dots do not read as data.
-func renderSpark(spark string, data lipgloss.Style) string {
+func (m *Model) renderSpark(spark string, data lipgloss.Style) string {
 	var b strings.Builder
 	for _, run := range splitRuns(spark, panel.Missing) {
 		if strings.ContainsRune(run, panel.Missing) {
-			b.WriteString(faintStyle.Render(run))
+			b.WriteString(m.th.faint.Render(run))
 		} else {
 			b.WriteString(data.Render(run))
 		}
@@ -473,7 +450,7 @@ type foldedParts struct {
 // the panel's continued querying. countsW aligns the columns across panels.
 func (m *Model) foldedLine(p *panelState, active bool, tw, countsW int) string {
 	title := textutil.TruncateToWidth(p.title(), tw)
-	left := activeCue(active) + "▸ " + styleTitle(padRight(title, tw), active)
+	left := m.activeCue(active) + "▸ " + m.styleTitle(padRight(title, tw), active)
 	f := m.foldedSummary(p)
 	if !f.counted {
 		return left + "  " + f.head
@@ -484,11 +461,11 @@ func (m *Model) foldedLine(p *panelState, active bool, tw, countsW int) string {
 func (m *Model) foldedSummary(p *panelState) foldedParts {
 	switch {
 	case p.err != nil:
-		return foldedParts{head: errStyle.Render(oneLine(p.err.Error(), max(10, m.width-lead-30)))}
+		return foldedParts{head: m.th.err.Render(oneLine(p.err.Error(), max(10, m.width-lead-30)))}
 	case !p.loaded:
-		return foldedParts{head: faintStyle.Render("loading…")}
+		return foldedParts{head: m.th.faint.Render("loading…")}
 	case len(p.rows) == 0:
-		return foldedParts{head: warnStyle.Render(noDataMsg)}
+		return foldedParts{head: m.th.warn.Render(noDataMsg)}
 	}
 	rows := panel.Arrange(p.rows, p.def, m.d.Windows, panel.SortYAML)
 	s := panel.Summarize(p.def, m.d.Windows, rows)
@@ -496,11 +473,11 @@ func (m *Model) foldedSummary(p *panelState) foldedParts {
 	case s.Single:
 		v := m.valueText(p, s.Value)
 		if t, ok := panel.Match(p.def.Thresholds, s.Value); ok {
-			v = colorStyle(t.Color).Render(t.Marker() + " " + v)
+			v = m.th.color(t.Color).Render(t.Marker() + " " + v)
 		}
 		// The row's name: with one row it is the only hint what is measured.
 		if t := rows[0].Title; t != "" && t != "{}" {
-			v += "  " + faintStyle.Render(t)
+			v += "  " + m.th.faint.Render(t)
 		}
 		return foldedParts{head: v}
 	case len(s.Counts) == 0:
@@ -514,16 +491,16 @@ func (m *Model) foldedSummary(p *panelState) foldedParts {
 			markers[t.Color] = t.Marker()
 		}
 		if _, ok := labels[t.Color]; !ok && t.Op != "" {
-			labels[t.Color] = " " + faintStyle.Render(p.thresholdLabel(t))
+			labels[t.Color] = " " + m.th.faint.Render(p.thresholdLabel(t))
 		}
 	}
 	var out []string
 	for _, c := range s.Counts {
-		out = append(out, colorStyle(c.Color).Render(markers[c.Color])+fmt.Sprintf("%d/%d", c.N, s.Rows)+labels[c.Color])
+		out = append(out, m.th.color(c.Color).Render(markers[c.Color])+fmt.Sprintf("%d/%d", c.N, s.Rows)+labels[c.Color])
 	}
 	f := foldedParts{counts: strings.Join(out, "  "), counted: true}
 	if s.Worst >= 0 {
-		f.worst = "  worst: " + rows[s.Worst].Title + " " + colorStyle(s.WorstColor).Render(m.valueText(p, s.WorstValue))
+		f.worst = "  worst: " + rows[s.Worst].Title + " " + m.th.color(s.WorstColor).Render(m.valueText(p, s.WorstValue))
 	}
 	return f
 }

@@ -36,13 +36,13 @@ func (m *Model) loading() bool {
 func (m *Model) statusSegment() string {
 	switch n := m.failing(); {
 	case !m.healthy():
-		return errStyle.Render("⚠ backend down")
+		return m.th.err.Render("⚠ backend down")
 	case n > 0:
-		return errStyle.Render(fmt.Sprintf("⚠ %d of %d panels failing", n, len(m.panels)))
+		return m.th.err.Render(fmt.Sprintf("⚠ %d of %d panels failing", n, len(m.panels)))
 	case m.loading():
-		return faintStyle.Render("● loading")
+		return m.th.faint.Render("● loading")
 	}
-	return okStyle.Render("●")
+	return m.th.ok.Render("●")
 }
 
 // allOK reports whether statusSegment shows the plain green dot.
@@ -69,23 +69,23 @@ func (m *Model) renderFooter(scrollHints string) string {
 		}
 	case m.allOK():
 		// Like omtui: the dot alone says ok, the target follows it directly.
-		status += " " + faintStyle.Render(target)
+		status += " " + m.th.faint.Render(target)
 	default:
-		status += footerSep + faintStyle.Render(target)
+		status += footerSep + m.th.faint.Render(target)
 	}
 	status += scrollHints
 
 	left := "? for help"
 	if m.snapshotMsg != "" {
-		style := faintStyle
+		style := m.th.faint
 		if m.snapshotErr {
-			style = errStyle
+			style = m.th.err
 		}
 		left = style.Render(textutil.TruncateToWidth(m.snapshotMsg, max(12, m.width/2)))
 	}
 	segs := []string{left}
 	if m.paused {
-		segs = append(segs, warnStyle.Bold(true).Render("⏸ PAUSED (p)"))
+		segs = append(segs, m.th.warn.Bold(true).Render("⏸ PAUSED (p)"))
 	}
 	// The restart key goes early: it is the one to find when something broke.
 	if m.backend != nil && !m.healthy() {
@@ -123,7 +123,7 @@ func (m *Model) healthy() bool {
 // validation error or the suggestion count.
 func (m *Model) editFooter() string {
 	if m.edit.kind == editFilter {
-		return "Filter (/): " + m.input.View() + footerSep + faintStyle.Render("Enter keep  Esc cancel")
+		return "Filter (/): " + m.input.View() + footerSep + m.th.faint.Render("Enter keep  Esc cancel")
 	}
 	list := m.filtered()
 	hint := "Enter apply  Esc cancel  Tab next"
@@ -136,16 +136,16 @@ func (m *Model) editFooter() string {
 	var info string
 	switch {
 	case m.edit.err != "":
-		info = errStyle.Render(m.edit.err)
+		info = m.th.err.Render(m.edit.err)
 	case m.edit.sug == sugLoading:
-		info = faintStyle.Render("loading values…")
+		info = m.th.faint.Render("loading values…")
 	case m.edit.sug == sugReady:
 		info = fmt.Sprintf("%d of %d values", len(list), len(m.edit.all))
 		if !slices.Contains(m.edit.all, m.input.Value()) {
-			info += faintStyle.Render(", not in list")
+			info += m.th.faint.Render(", not in list")
 		}
 	default:
-		info = faintStyle.Render("no value list, free text")
+		info = m.th.faint.Render("no value list, free text")
 	}
 	return hint + " │ " + info
 }

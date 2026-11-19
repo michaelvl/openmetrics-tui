@@ -85,14 +85,14 @@ func (m *Model) renderHeader() string {
 	statusW := m.width - boxesW - 2
 	status := []string{"", "", ""}
 	if hidden > 0 {
-		status[0] = faintStyle.Render(fmt.Sprintf("+%d more variables (keys %s)", hidden, m.hiddenKeys(boxes)))
+		status[0] = m.th.faint.Render(fmt.Sprintf("+%d more variables (keys %s)", hidden, m.hiddenKeys(boxes)))
 	}
 	for r := range rows {
 		if statusW > 0 && status[r] != "" {
 			rows[r] += "  " + clip(status[r], statusW)
 		}
 	}
-	title := dashTitleStyle.Render(textutil.TruncateToWidth(m.d.Title, m.width))
+	title := m.th.dashTitle.Render(textutil.TruncateToWidth(m.d.Title, m.width))
 	return title + "\n" + strings.Join(rows, "\n")
 }
 
@@ -134,17 +134,17 @@ func (m *Model) renderBox(b boxPos) string {
 		in.SetCursor(in.Position())
 		value = in.View()
 	case m.vals[vr.Name] == "":
-		value = faintStyle.Render(textutil.TruncateToWidth("—", inner))
+		value = m.th.faint.Render(textutil.TruncateToWidth("—", inner))
 	default:
 		value = textutil.TruncateToWidth(m.vals[vr.Name], inner)
 	}
 
-	captionStyle := faintStyle
+	captionStyle := m.th.faint
 	if focused {
-		captionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
+		captionStyle = m.th.r.NewStyle().Foreground(lipgloss.Color("63"))
 	}
-	top := boxTop(vr.Name, b.v+1, inner, lipgloss.NewStyle().Foreground(border), captionStyle)
-	body := lipgloss.NewStyle().
+	top := boxTop(vr.Name, b.v+1, inner, m.th.r.NewStyle().Foreground(border), captionStyle)
+	body := m.th.r.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderTop(false).
 		BorderForeground(border).
@@ -211,16 +211,14 @@ func (m *Model) overlaySuggestions(body []string) []string {
 	for i := start; i < end; i++ {
 		mark, text := "  ", textutil.TruncateToWidth(list[i], inner-2)
 		if i == m.edit.hl {
-			mark, text = "▸ ", accentStyle.Render(text)
+			mark, text = "▸ ", m.th.accent.Render(text)
 		}
 		rows = append(rows, mark+text)
 	}
 	if more := len(list) - len(rows); more > 0 {
-		rows = append(rows, faintStyle.Render(fmt.Sprintf("… %d more", more)))
+		rows = append(rows, m.th.faint.Render(fmt.Sprintf("… %d more", more)))
 	}
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("63")).
+	box := m.th.box().
 		Width(inner).
 		Render(strings.Join(rows, "\n"))
 	for j, ol := range strings.Split(box, "\n") {

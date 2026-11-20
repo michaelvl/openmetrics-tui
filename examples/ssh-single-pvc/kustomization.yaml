@@ -1,0 +1,15 @@
+# examples/ssh-single with the VictoriaMetrics data on a PersistentVolumeClaim,
+# so history survives pod restarts: kubectl apply -k examples/ssh-single-pvc
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../ssh-single
+  - pvc.yaml
+patches:
+  - target: {kind: Deployment, name: omtui-dash}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/volumes/1
+        value:
+          name: data
+          persistentVolumeClaim: {claimName: omtui-data}

@@ -1,8 +1,8 @@
-# Copy of examples/kind-dashboard.yaml for the sidecar example. datasource.url is ignored: omtui-dash gets --prom.
-# Dashboard for the kind demo cluster (make kind-up, make kind-dash).
-title: Kind demo
-datasource:
-  url: http://localhost:8428 # ignored by --managed
+# One of the dashboards in the directory omtui-dash serves: `ssh -t host team-a`.
+# Based on examples/kind-dashboard.yaml. This one carries the scrape section,
+# and only one dashboard in the directory may (see `make ssh-scrape-config`).
+# A datasource.url would be ignored: omtui-dash gets --prom.
+title: Team A, kind demo
 refresh: 10s
 windows: [now, 5m, 15m, 1h]
 spark: 1h

@@ -6,6 +6,10 @@
     "golangci-lint@2.1.6",
     "kind@0.33.0",
     "vhs@0.12.1",
-    "victoriametrics@1.156.0"
+    "victoriametrics@1.156.0",
+    "kubectl@latest",
+    "kustomize@latest",
+    "kubeconform@latest",
+    "openssh@latest"
   ]
 }

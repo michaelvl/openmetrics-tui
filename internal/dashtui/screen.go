@@ -53,7 +53,7 @@ func (m *Model) banner() []string {
 	var out []string
 	switch {
 	case m.restarting:
-		out = append(out, m.th.warn.Render("↻ restarting kubectl proxy and victoria-metrics..."))
+		out = append(out, m.th.warn.Render("↻ restarting the backend..."))
 	case m.restartErr != "":
 		out = append(out, m.th.err.Render(oneLine("restart failed: "+m.restartErr, m.width-2)))
 	default:

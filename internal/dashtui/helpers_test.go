@@ -294,14 +294,14 @@ type fakeBackend struct {
 	mu       sync.Mutex
 	health   []managed.ChildStatus
 	logs     []string
-	events   chan managed.Event
+	events   managed.Broadcaster
+	subs     int // live subscriptions
 	restarts int
 	restartE error
 }
 
 func newFakeBackend() *fakeBackend {
 	return &fakeBackend{
-		events: make(chan managed.Event, 1),
 		health: []managed.ChildStatus{{Name: "kubectl proxy", Running: true}, {Name: "victoria-metrics", Running: true}},
 		logs:   []string{"vm: started", "vm: scraping 3 targets"},
 	}
@@ -313,7 +313,24 @@ func (b *fakeBackend) Health() []managed.ChildStatus {
 	return append([]managed.ChildStatus(nil), b.health...)
 }
 
-func (b *fakeBackend) Events() <-chan managed.Event { return b.events }
+func (b *fakeBackend) Subscribe() (<-chan managed.Event, func()) {
+	ch, unsub := b.events.Subscribe()
+	b.mu.Lock()
+	b.subs++
+	b.mu.Unlock()
+	return ch, func() {
+		unsub()
+		b.mu.Lock()
+		b.subs--
+		b.mu.Unlock()
+	}
+}
+
+func (b *fakeBackend) subscribers() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.subs
+}
 
 func (b *fakeBackend) Logs() []string {
 	b.mu.Lock()

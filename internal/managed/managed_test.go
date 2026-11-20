@@ -186,8 +186,10 @@ func TestCrashDetectionAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = b.Close() }()
+	events, unsub := b.Subscribe()
+	defer unsub()
 	select {
-	case ev := <-b.Events():
+	case ev := <-events:
 		if ev.Child != "victoria-metrics" || ev.Err == nil {
 			t.Errorf("event %+v", ev)
 		}
@@ -380,5 +382,133 @@ func TestRestartAfterCloseStartsNothing(t *testing.T) {
 		if h.Running {
 			t.Errorf("%s running after Close and Restart", h.Name)
 		}
+	}
+}
+
+func TestInCluster(t *testing.T) {
+	opts := fakeOptions(t)
+	af := argsFile(t)
+	opts.InCluster = true
+	opts.KubectlBin = "kubectl-that-does-not-exist" // must never be looked up
+	t.Setenv("FAKE_MODE_VM", "crash")
+	b, err := Start(ctx(t), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	events, unsub := b.Subscribe()
+	defer unsub()
+
+	if h := b.Health(); len(h) != 1 || h[0].Name != "victoria-metrics" {
+		t.Errorf("health %+v, want only victoria-metrics", h)
+	}
+	if !strings.Contains(b.Describe(), "in-cluster") {
+		t.Errorf("describe %q", b.Describe())
+	}
+	select {
+	case ev := <-events:
+		if ev.Child != "victoria-metrics" {
+			t.Errorf("event %+v", ev)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no exit event")
+	}
+	t.Setenv("FAKE_MODE_VM", "")
+	if err := b.Restart(ctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	if h := b.Health(); len(h) != 1 || !h[0].Running {
+		t.Errorf("after restart: %+v", h)
+	}
+	if _, err := b.Querier().Instant(ctx(t), "up", time.Now()); err != nil {
+		t.Errorf("query after restart: %v", err)
+	}
+
+	raw, _ := os.ReadFile(af)
+	if strings.Contains(string(raw), "kubectl") {
+		t.Errorf("kubectl was run:\n%s", raw)
+	}
+	cfg, err := os.ReadFile(b.tmpDir + "/scrape.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cfg), "job_name: pods\n") || strings.Contains(string(cfg), "api_server") {
+		t.Errorf("scrape config is not the in-cluster one:\n%s", cfg)
+	}
+}
+
+func TestConcurrentRestartRunsOnce(t *testing.T) {
+	opts := fakeOptions(t)
+	af := argsFile(t)
+	opts.InCluster = true
+	b, err := Start(ctx(t), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	started := func() int {
+		raw, _ := os.ReadFile(af)
+		return strings.Count(string(raw), "-promscrape.config=")
+	}
+	before := started()
+
+	// Hold the lifecycle lock so every caller piles up behind one restart.
+	b.life.Lock()
+	const n = 5
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() { errs <- b.Restart(ctx(t)) }()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		b.flightMu.Lock()
+		f := b.flight
+		b.flightMu.Unlock()
+		if f != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no restart began")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond) // let the others find it in flight
+	b.life.Unlock()
+	for i := 0; i < n; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("Restart: %v", err)
+		}
+	}
+	if got := started() - before; got != 1 {
+		t.Errorf("victoria-metrics started %d times, want 1", got)
+	}
+	// Once finished, a new call restarts again.
+	if err := b.Restart(ctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	if got := started() - before; got != 2 {
+		t.Errorf("after a later Restart: %d starts, want 2", got)
+	}
+}
+
+func TestConcurrentRestartSharesError(t *testing.T) {
+	opts := fakeOptions(t)
+	opts.InCluster = true
+	b, err := Start(ctx(t), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	t.Setenv("FAKE_MODE_VM", "crash-start")
+	b.life.Lock()
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() { errs <- b.Restart(ctx(t)) }()
+	}
+	time.Sleep(200 * time.Millisecond)
+	b.life.Unlock()
+	e1, e2 := <-errs, <-errs
+	if e1 == nil || e2 == nil || e1 != e2 {
+		t.Errorf("want the same error twice, got %v and %v", e1, e2)
 	}
 }

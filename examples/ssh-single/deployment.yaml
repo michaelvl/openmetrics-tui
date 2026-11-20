@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omtui-dash
+  namespace: omtui-single
+spec:
+  replicas: 1 # one store per pod; more replicas scrape everything again
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: omtui-dash}
+  template:
+    metadata:
+      labels: {app: omtui-dash}
+    spec:
+      serviceAccountName: omtui-dash
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: omtui-dash
+          # Build it with `make ssh-single-image`; on kind it is loaded for you.
+          image: omtui-dash-single:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            # omtui-dash starts victoria-metrics itself and generates its scrape
+            # config from the scrape section of the dashboards.
+            - --managed
+            - --in-cluster
+            - --data-dir=/data
+            - --retention=24h
+            - --ssh-listen=:2222
+            - --ssh-host-key=/keys/host_key
+            - --ssh-authorized-keys=/auth/authorized_keys
+            - --ssh-max-sessions=20
+            - /dash # a directory of dashboards, one per file
+          ports:
+            - {name: ssh, containerPort: 2222}
+          volumeMounts:
+            - {name: dashboard, mountPath: /dash, readOnly: true}
+            - {name: host-key, mountPath: /keys, readOnly: true}
+            - {name: authorized-keys, mountPath: /auth, readOnly: true}
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp} # scratch for the generated scrape config
+          readinessProbe:
+            tcpSocket: {port: ssh}
+          livenessProbe:
+            tcpSocket: {port: ssh}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          # Estimates, not measured: omtui-dash plus a small cluster's worth of series.
+          resources:
+            requests: {cpu: 150m, memory: 192Mi}
+            limits: {memory: 768Mi}
+      volumes:
+        - name: dashboard
+          configMap: {name: omtui-dashboards}
+        - name: data
+          emptyDir: {} # history is lost when the pod restarts; see examples/ssh-single-pvc
+        - name: tmp
+          emptyDir: {}
+        - name: host-key
+          secret:
+            secretName: omtui-host-key
+            defaultMode: 0440 # group-readable for fsGroup; the key stays out of the image
+        - name: authorized-keys
+          secret: {secretName: omtui-authorized-keys}

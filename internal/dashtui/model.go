@@ -21,10 +21,12 @@ import (
 )
 
 // Backend is the part of managed.Backend the UI needs: child health, the log
-// ring buffer and restart. It is nil for an external backend.
+// ring buffer and restart. It is nil for an external backend. Sessions share
+// one Backend, so each model subscribes to its events and Restart may be
+// called from several at once.
 type Backend interface {
 	Health() []managed.ChildStatus
-	Events() <-chan managed.Event
+	Subscribe() (events <-chan managed.Event, unsubscribe func())
 	Logs() []string
 	Restart(ctx context.Context) error
 }
@@ -133,6 +135,7 @@ type Model struct {
 	q       promapi.Querier
 	lv      promapi.LabelValuer
 	backend Backend
+	events  <-chan managed.Event // this model's subscription to backend
 	mode    string
 	kubeCtx string
 	url     string
@@ -266,6 +269,12 @@ func New(opts Options) *Model {
 		m.lv = lv
 	}
 	m.ctx, m.cancel = context.WithCancel(root)
+	if m.backend != nil {
+		var unsub func()
+		m.events, unsub = m.backend.Subscribe()
+		// The session is over when its context ends; stop receiving then.
+		context.AfterFunc(m.ctx, unsub)
+	}
 	for _, p := range d.Panels {
 		m.panels = append(m.panels, &panelState{def: p, folded: p.Folded})
 	}
@@ -359,7 +368,7 @@ func (m *Model) healthCmd() tea.Cmd {
 }
 
 func (m *Model) waitEvent() tea.Cmd {
-	ch, ctx := m.backend.Events(), m.rootCtx
+	ch, ctx := m.events, m.rootCtx
 	return func() tea.Msg {
 		select {
 		case ev := <-ch:

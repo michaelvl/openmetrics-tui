@@ -11,6 +11,10 @@ it a backend:
 3. [An existing backend in the cluster](#an-existing-backend-in-the-cluster),
    reached with `kubectl port-forward` and `--prom`.
 
+A fourth option runs `omtui-dash` itself in the cluster and serves it
+[over SSH](#running-it-in-the-cluster-over-ssh), so people `ssh` in instead of
+installing anything.
+
 The flags and the dashboard YAML are described in the
 [README](../README.md#omtui-dash-promql-dashboard).
 
@@ -240,6 +244,89 @@ variables behave as ordinary filters and panels can reach all of its history.
 
 `omtui-dash --check --prom ... my-dashboard.yaml` is a quick way to confirm that
 the dashboard's queries return data before opening the TUI.
+
+## Running it in the cluster over SSH
+
+`examples/ssh/` deploys `omtui-dash` as a pod with two containers: a
+VictoriaMetrics sidecar that scrapes pods directly (no `kubectl proxy`, no
+`pods/proxy` permission, no Prometheus needed) and `omtui-dash --prom
+http://localhost:8428 --ssh-listen :2222`. Users connect with `ssh`; see
+[Serve over SSH](../README.md#serve-over-ssh) for the flags, auth model and
+the dashboard directory.
+
+For one container and one image instead, see
+[One container](#one-container-managed-in-cluster) below.
+
+The sidecar's scrape config is generated from the dashboards:
+
+```sh
+omtui-dash --print-scrape-config examples/ssh/dashboards > examples/ssh/scrape.yml
+```
+
+`--print-scrape-config [dashboard.yaml | dir]` prints the in-cluster variant of
+the managed-mode config and exits. Pods are scraped at their own IPs instead of
+through the API server. It reads the `scrape:` section of the dashboard (or the
+one dashboard in the directory that has one; several is an error) and honours
+`--namespace`. It needs no cluster or backend. `make ssh-scrape-config` does the
+above.
+
+Try it on kind:
+
+```sh
+make kind-up                              # demo workloads to scrape
+make ssh-image ssh-example-keys ssh-scrape-config
+kubectl apply -k examples/ssh
+kubectl -n omtui port-forward svc/omtui-dash 2222:2222
+ssh -p 2222 localhost                     # picker
+ssh -t -p 2222 localhost team-a           # or by name
+```
+
+`ssh-example-keys` creates a host key and uses your `~/.ssh/id_ed25519.pub` as
+`authorized_keys`; the files in `examples/ssh/secrets/` must not be committed.
+`rbac.yaml` gives a `Role` for the `demo` namespace (`list` and `watch` on
+`pods`); use `rbac-cluster.yaml` for all namespaces. The dashboards are in a
+ConfigMap generated from `examples/ssh/dashboards/`, and a change to it is
+picked up by new connections without restarting the pod.
+
+Limits:
+
+- History is lost when the pod restarts: the example's storage is an
+  `emptyDir`. Use a PersistentVolumeClaim for `/vm-data` to keep it.
+- Keep one replica; each replica would run its own sidecar and scrape every pod
+  again.
+- The sidecar listens on `:8428` without authentication, so anything in the
+  cluster can query it. Add a NetworkPolicy if that matters.
+- No snapshot key and no `--http-port` in SSH sessions. `R` and `L` do nothing
+  with the sidecar, because `omtui-dash` does not manage it; the single-container
+  variant below does.
+- For truecolor, the client needs `SendEnv COLORTERM` and the server must
+  accept it; otherwise colour depth follows the client's `TERM`.
+
+### One container: managed, in-cluster
+
+`examples/ssh-single/` runs one container with `omtui-dash --managed
+--in-cluster --ssh-listen :2222 /dash`. `omtui-dash` starts `victoria-metrics`
+itself, with the same in-cluster scrape config as `--print-scrape-config`
+(generated from the dashboards' `scrape:` section, at start), and supervises
+it. If the child dies, a banner shows in every open SSH session, `L` shows its
+log and `R` from any session restarts it for all of them. Unlike plain
+`--managed` it needs no `kubectl` and no kubeconfig, so SSH accepts it.
+
+```sh
+make kind-up ssh-single-image ssh-example-keys
+kubectl apply -k examples/ssh-single
+kubectl -n omtui-single port-forward svc/omtui-dash 2223:2222
+ssh -p 2223 localhost
+```
+
+`make ssh-single-image` builds the `single` target of the `Dockerfile`:
+`omtui-dash` plus a pinned `victoria-metrics` (no `kubectl`), running as a
+non-root user with a writable `/data`. The manifests use their own namespace
+(`omtui-single`) and Role name, so they can sit beside `examples/ssh`. For
+history that survives pod restarts, `kubectl apply -k examples/ssh-single-pvc`
+puts `/data` on a PersistentVolumeClaim. The dashboards are copies of
+`examples/ssh/dashboards/`; keep one replica. A change to a `scrape:` section
+needs a pod restart.
 
 ## Trying it on a throwaway kind cluster
 

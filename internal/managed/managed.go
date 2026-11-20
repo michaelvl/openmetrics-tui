@@ -1,6 +1,7 @@
 // Package managed runs the managed backend: a child kubectl proxy and a child
-// VictoriaMetrics wired to scrape pods through the proxy. The dashboard only
-// sees the Querier.
+// VictoriaMetrics wired to scrape pods through the proxy, or, in-cluster, only
+// the VictoriaMetrics child scraping pods directly. The dashboard only sees the
+// Querier.
 package managed
 
 import (
@@ -33,6 +34,10 @@ const (
 // Options configures Start.
 type Options struct {
 	KubeContext string
+	// InCluster runs inside a pod: no kubectl proxy and no kubectl preflight,
+	// only VictoriaMetrics, which discovers and scrapes pods directly with the
+	// pod's ServiceAccount. KubeContext and KubectlBin do not apply.
+	InCluster bool
 	// Namespaces overrides the scrape section's namespaces.
 	Namespaces []string
 	KubectlBin string // default "kubectl"
@@ -41,7 +46,7 @@ type Options struct {
 	DataDir   string
 	Retention string // default DefaultRetention
 	// ScrapeConfig is a user-written scrape config; ${KUBE_PROXY} is replaced
-	// by the proxy address.
+	// by the proxy address (there is none with InCluster).
 	ScrapeConfig string
 	// LogFile receives every child output line in addition to the ring buffer.
 	LogFile string
@@ -84,11 +89,15 @@ type Backend struct {
 	warnings    []string
 	kubeContext string // guarded by mu
 	preflighted bool
-	events      chan Event
+	events      Broadcaster
 
 	// life serialises Restart and Close, so a restart cannot start children
 	// after Close has stopped them.
 	life sync.Mutex
+
+	// flight is the Restart in progress, if any; see Restart.
+	flightMu sync.Mutex
+	flight   *restartFlight
 
 	mu      sync.Mutex
 	proxy   *child
@@ -127,7 +136,7 @@ func Start(ctx context.Context, opts Options) (*Backend, error) {
 		return nil, err
 	}
 
-	b := &Backend{opts: opts, events: make(chan Event, 8), exitErr: map[string]error{}}
+	b := &Backend{opts: opts, exitErr: map[string]error{}}
 	var out io.Writer
 	if opts.LogFile != "" {
 		f, err := os.OpenFile(opts.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -183,8 +192,21 @@ func (b *Backend) fail(step string, err error) error {
 	return &StartError{Step: step, Err: err, Tail: b.log.Tail(errTail)}
 }
 
-// startAll runs preflight (once per Backend) and starts both children.
+// noProxy reports whether only VictoriaMetrics runs.
+func (b *Backend) noProxy() bool { return b.opts.skipProxy || b.opts.InCluster }
+
+// startAll runs preflight (once per Backend) and starts both children, or
+// only VictoriaMetrics when there is no proxy.
 func (b *Backend) startAll(ctx context.Context) error {
+	if b.opts.InCluster {
+		if !b.preflighted {
+			if err := b.checkVM(ctx); err != nil {
+				return err
+			}
+			b.preflighted = true
+		}
+		return b.startVM(ctx, "")
+	}
 	if b.opts.skipProxy {
 		return b.startVM(ctx, "")
 	}
@@ -256,7 +278,7 @@ func (b *Backend) scrapeConfigPath(proxyHP string) (string, error) {
 		data = []byte(strings.ReplaceAll(string(raw), "${KUBE_PROXY}", proxyHP))
 	} else {
 		var err error
-		data, err = GenerateScrapeConfig(ScrapeParams{Scrape: b.opts.Scrape, Namespaces: b.opts.Namespaces, ProxyAddr: proxyHP})
+		data, err = GenerateScrapeConfig(ScrapeParams{Scrape: b.opts.Scrape, Namespaces: b.opts.Namespaces, ProxyAddr: proxyHP, InCluster: b.opts.InCluster})
 		if err != nil {
 			return "", err
 		}
@@ -361,10 +383,7 @@ func (b *Backend) childExited(name string, err error) {
 	}
 	b.exitErr[name] = err
 	b.mu.Unlock()
-	select {
-	case b.events <- Event{Child: name, Err: err}:
-	default:
-	}
+	b.events.Send(Event{Child: name, Err: err})
 }
 
 // --- API used by the TUI ---
@@ -405,6 +424,9 @@ func (b *Backend) URL() string {
 func (b *Backend) Describe() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.opts.InCluster {
+		return fmt.Sprintf("managed: in-cluster victoria-metrics %s", b.vmAddr)
+	}
 	ctxName := b.opts.KubeContext
 	if ctxName == "" {
 		ctxName = "current context"
@@ -429,16 +451,50 @@ func (b *Backend) Health() []ChildStatus {
 	return out
 }
 
-// Events delivers a value whenever a child exits unexpectedly.
-func (b *Backend) Events() <-chan Event { return b.events }
+// Subscribe delivers an Event whenever a child exits unexpectedly. Every
+// subscriber gets every event; the returned function unsubscribes.
+func (b *Backend) Subscribe() (<-chan Event, func()) { return b.events.Subscribe() }
 
 // Logs returns the buffered child output, oldest first.
 func (b *Backend) Logs() []string { return b.log.Lines() }
 
-// Restart stops both children and starts them again, reusing the data dir and
+// restartFlight is one Restart that callers can wait on.
+type restartFlight struct {
+	done chan struct{}
+	err  error
+}
+
+// Restart stops the children and starts them again, reusing the data dir and
 // trying to keep the VictoriaMetrics address so the Querier stays valid. The
-// proxy port changes on every start, so both children restart together.
+// proxy port changes on every start, so with a proxy both children restart
+// together. Sessions share the backend, so a call made while another Restart
+// runs waits for it and returns its result instead of restarting again. The
+// restart is not cancelled when the caller's ctx ends, since others may wait
+// on it; each child's startup timeout bounds it.
 func (b *Backend) Restart(ctx context.Context) error {
+	b.flightMu.Lock()
+	if f := b.flight; f != nil {
+		b.flightMu.Unlock()
+		select {
+		case <-f.done:
+			return f.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	f := &restartFlight{done: make(chan struct{})}
+	b.flight = f
+	b.flightMu.Unlock()
+
+	f.err = b.restart(context.WithoutCancel(ctx))
+	b.flightMu.Lock()
+	b.flight = nil
+	b.flightMu.Unlock()
+	close(f.done)
+	return f.err
+}
+
+func (b *Backend) restart(ctx context.Context) error {
 	b.life.Lock()
 	defer b.life.Unlock()
 	b.mu.Lock()
@@ -452,7 +508,7 @@ func (b *Backend) Restart(ctx context.Context) error {
 	b.exitErr = map[string]error{}
 	b.proxy, b.vm = nil, nil
 	b.mu.Unlock()
-	if b.opts.skipProxy {
+	if b.noProxy() {
 		return b.startVM(ctx, "")
 	}
 	if err := b.startProxy(ctx); err != nil {

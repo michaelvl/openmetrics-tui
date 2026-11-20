@@ -17,7 +17,8 @@ Kubernetes context for you.
 ![Screenshot-metrics](docs/screen1.png)
 
 Jump to: [install omtui](#installation) · [install omtui-dash](#installing-omtui-dash) ·
-[omtui-dash quick start](#quick-start) (no cluster needed)
+[omtui-dash quick start](#quick-start) (no cluster needed) ·
+[serve over SSH](#serve-over-ssh)
 
 # omtui: live metrics viewer
 
@@ -363,6 +364,7 @@ and `--flag` alike.
 | `--prom-user USER` | Basic-auth user for `--prom`. |
 | `--prom-password-file FILE` | File holding the basic-auth password. |
 | `--managed` | Start `kubectl proxy` and a local VictoriaMetrics (managed mode). |
+| `--in-cluster` | With `--managed`, run inside a pod: start only `victoria-metrics` and scrape pods directly with the pod's ServiceAccount. No `kubectl`; `--kube-context` and `--kubectl-bin` are rejected. For [SSH](#serve-over-ssh) from one container. |
 | `--kube-context NAME` | `kubectl` context for `--managed` (default: the current context). |
 | `--namespace NS` | Scrape only this namespace; repeat for several. Overrides `scrape.namespaces`. |
 | `--kubectl-bin PATH` | `kubectl` binary (default: `kubectl` on `PATH`). |
@@ -372,9 +374,16 @@ and `--flag` alike.
 | `--scrape-config FILE` | Use your own VictoriaMetrics scrape config instead of the generated one. `${KUBE_PROXY}` in it is replaced by the proxy address, `127.0.0.1:PORT`. |
 | `--log-file FILE` | Append the output of `kubectl` and `victoria-metrics` to `FILE`. |
 | `--http-port PORT` | Serve the dashboard over HTTP on `127.0.0.1:PORT`. See [HTTP endpoint](#http-endpoint). |
+| `--print-scrape-config` | Print the in-cluster VictoriaMetrics scrape config for the dashboard (or directory) and `--namespace`, then exit. See [docs/kubernetes-local.md](docs/kubernetes-local.md#running-it-in-the-cluster-over-ssh). |
+| `--ssh-listen ADDR` | Serve the dashboard over SSH on `ADDR` (for example `:2222`) instead of the local terminal. See [Serve over SSH](#serve-over-ssh). |
+| `--ssh-authorized-keys FILE` | OpenSSH `authorized_keys` file listing who may connect. Re-read on every connection. |
+| `--ssh-allow-any-key` | Let any public key connect. Only for non-sensitive metrics. |
+| `--ssh-host-key FILE` | Host key file (default `omtui-dash-host-key`). An ed25519 key is generated if it does not exist. |
+| `--ssh-max-sessions N` | Maximum concurrent SSH sessions (default `20`). |
 
 `--kube-context`, `--namespace`, `--kubectl-bin`, `--vm-bin`, `--data-dir`,
-`--retention`, `--scrape-config` and `--log-file` only apply with `--managed`.
+`--retention`, `--scrape-config`, `--log-file` and `--in-cluster` only apply with `--managed`.
+The `--ssh-*` flags other than `--ssh-listen` only apply with `--ssh-listen`.
 
 ## Dashboard YAML reference
 
@@ -608,3 +617,104 @@ backend could not start, and `2` for usage errors. Validation errors are
 reported without contacting the backend. The command is suitable for CI, with the backend being the mock
 server or a real one. `make check-example` does this for the bundled example.
 A panel that returns no series counts as a success and is flagged `(no data)`.
+
+## Serve over SSH
+
+`omtui-dash` can serve the dashboard over SSH instead of drawing it in your
+terminal, so a team can `ssh` to one shared instance with no install on their
+side. Each connection gets its own session (own variables, folds and window
+size); all sessions share one backend connection.
+
+```sh
+omtui-dash --prom http://localhost:9090 \
+  --ssh-listen :2222 --ssh-authorized-keys ~/.ssh/authorized_keys \
+  my-dashboard.yaml
+ssh -p 2222 host
+```
+
+On start it prints the listen address and the host key fingerprint. The host
+key is read from `--ssh-host-key` (default `omtui-dash-host-key` in the working
+directory) and an ed25519 key is generated there if the file does not exist.
+Keep the file, or clients see a changed host key.
+
+**Authentication** is by public key only; there are no passwords and no
+accounts. Pass `--ssh-authorized-keys FILE` (OpenSSH `authorized_keys` format,
+re-read on every connection, so edits apply without a restart) or
+`--ssh-allow-any-key`, which accepts every key and prints a warning. One of the
+two is required. A key in `authorized_keys` is the only access control: there is
+no per-user permission, and everyone who can connect sees the same dashboards.
+Options on a key line, such as `command=`, are not applied.
+
+**Security notes**
+
+- The session is the dashboard only: no shell, no command execution and no port
+  forwarding. A connection needs a pseudo-terminal; `ssh host command` without
+  `-t` is refused.
+- Anyone who may connect can read everything the backend's credentials can.
+  Use `--prom-token-file` or `--prom-user` with a read-only identity.
+- With `--ssh-allow-any-key`, anyone who can reach the port can view the
+  dashboard. Use it only for non-sensitive metrics on a trusted network.
+- `--ssh-max-sessions` (default 20) caps concurrent sessions; further
+  connections are told "Too many sessions" and closed.
+- `--check` and `--http-port` cannot be combined with `--ssh-listen`, and
+  neither can `--managed` unless it is `--managed --in-cluster` (see
+  [Limits](#limits)): plain `--managed` would use the server's kubeconfig for
+  everyone who connects.
+
+### Several dashboards: a directory
+
+Give a directory instead of a file and every `*.yaml` and `*.yml` in it
+(not recursive) becomes a dashboard, named after the file without its
+extension: `team-a.yaml` is `team-a`.
+
+```sh
+omtui-dash --prom http://localhost:9090 --ssh-listen :2222 \
+  --ssh-authorized-keys authorized_keys dashboards/
+
+ssh -p 2222 host            # a picker lists the dashboards
+ssh -t -p 2222 host team-a  # open one directly
+```
+
+- With more than one dashboard, a plain `ssh host` shows a picker (up/down or
+  `j`/`k`, Enter to open, `q` to quit). With exactly one it opens at once.
+- `ssh -t host NAME` opens a dashboard by name. `-t` is needed when a command is
+  given, or ssh does not allocate a terminal. An unknown name prints the
+  available ones and exits non-zero.
+- Names must match `[a-z0-9][a-z0-9._-]*`; other files are skipped with a
+  warning. Two files with the same name, or a file that does not load, stop
+  the start.
+- The directory is re-read on every connection, so changing a file changes what
+  new sessions see. A file that no longer loads is logged and skipped; if
+  nothing loads, the previous set stays.
+
+Catalog rules:
+
+- It needs `--prom` or `--managed --in-cluster`: dashboards do not each start a
+  backend, so they share one. `datasource.url` in
+  the files is ignored, with a warning.
+- `--var` is rejected, because the dashboards have different variables. Each
+  uses its variables' defaults and the user changes them in the session.
+- At most one dashboard may have a `scrape:` section, because the sidecar's
+  scrape config is shared (see [docs/kubernetes-local.md](docs/kubernetes-local.md#running-it-in-the-cluster-over-ssh)).
+  `--print-scrape-config DIR` fails if several do.
+- `omtui-dash --check --prom URL dir/` checks every dashboard in turn.
+
+### Limits
+
+- There is no snapshot key: `S` is disabled and hidden in SSH sessions, as the
+  file would be written on the server.
+- `R` and `L` (restart and log) only exist with `--managed --in-cluster`, which
+  starts `victoria-metrics` inside the pod: the health banner, `L` and `R` then
+  work in every session, and a restart from one session recovers all of them.
+  With `--prom` (including the two-container example) there is no managed
+  backend, so these keys do nothing.
+- History lives in the backend. With the VictoriaMetrics sidecar in the
+  [Kubernetes example](docs/kubernetes-local.md#running-it-in-the-cluster-over-ssh)
+  it is lost when the pod restarts, unless you give `-storageDataPath` a
+  PersistentVolumeClaim (the example uses an `emptyDir`).
+- No headless HTTP over SSH: `--http-port` cannot be used with `--ssh-listen`.
+- Colour depth depends on the client. The profile comes from the client's
+  `TERM`; truecolor additionally needs `COLORTERM=truecolor`, which OpenSSH only
+  forwards with `SendEnv COLORTERM` in `~/.ssh/config` (or `-o SendEnv=COLORTERM`),
+  and the server must accept it. The dashboard itself uses 256 colours, so this
+  rarely matters.

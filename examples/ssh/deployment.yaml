@@ -53,7 +53,7 @@ spec:
             - --ssh-host-key=/keys/host_key
             - --ssh-authorized-keys=/auth/authorized_keys
             - --ssh-max-sessions=20
-            - /dash/dashboard.yaml
+            - /dash # a directory of dashboards, one per file
           ports:
             - {name: ssh, containerPort: 2222}
           volumeMounts:
@@ -77,7 +77,7 @@ spec:
         - name: scrape
           configMap: {name: omtui-scrape}
         - name: dashboard
-          configMap: {name: omtui-dashboard}
+          configMap: {name: omtui-dashboards}
         - name: vm-data
           emptyDir: {} # history is lost when the pod restarts
         - name: host-key

@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: omtui-dash
+  namespace: omtui-single
+---
+# Pod discovery in the namespaces that are scraped. Scraping goes directly to
+# the pod IPs, so there is no pods/proxy permission. The names differ from
+# examples/ssh so that both examples can run in one cluster.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: omtui-dash-single
+  namespace: demo
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: omtui-dash-single
+  namespace: demo
+subjects:
+  - kind: ServiceAccount
+    name: omtui-dash
+    namespace: omtui-single
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: omtui-dash-single

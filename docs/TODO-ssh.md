@@ -92,96 +92,114 @@ and its exit criteria; tick a phase only when the exit criteria hold.
 
 ### 4b. Image and manifests
 
-Files are written but not built or applied: this machine has no docker, podman or kubectl. Only the Makefile target was run. The `omtui-dash` memory and CPU in the Deployment were measured at 20 sessions (peak RSS 85 MB); the VictoriaMetrics numbers are estimates, so the resources item stays unticked.
+The image was built with docker and run non-root with a read-only root filesystem and the example's key mounts (SSH served, host key logged). The manifests parse as YAML but were not applied or run through kustomize: there is no kubectl here, so that is left to 4c. The `omtui-dash` memory and CPU in the Deployment were measured at 20 sessions (peak RSS 85 MB); the VictoriaMetrics numbers are estimates, so the resources item stays unticked.
 
-- [ ] `Dockerfile` for `omtui-dash` only: multi-stage, `CGO_ENABLED=0`, distroless or scratch, non-root
-- [ ] `examples/ssh/`: Deployment with two containers (pinned `victoriametrics/victoria-metrics` with `-promscrape.config`, `-retentionPeriod=24h`, `-search.latencyOffset=0`, `emptyDir`; and `omtui-dash --prom http://localhost:8428 --ssh-listen :2222 ...`)
-- [ ] ConfigMaps for the dashboard and the generated scrape config
+- [x] `Dockerfile` for `omtui-dash` only: multi-stage, `CGO_ENABLED=0`, distroless or scratch, non-root
+- [x] `examples/ssh/`: Deployment with two containers (pinned `victoriametrics/victoria-metrics` with `-promscrape.config`, `-retentionPeriod=24h`, `-search.latencyOffset=0`, `emptyDir`; and `omtui-dash --prom http://localhost:8428 --ssh-listen :2222 ...`)
+- [x] ConfigMaps for the dashboard and the generated scrape config
 - [x] Makefile target regenerating the scrape ConfigMap with `--print-scrape-config`
-- [ ] Secrets for the host key and the authorized keys
-- [ ] ServiceAccount, Role/RoleBinding (and a ClusterRole variant) with `list` and `watch` on `pods` only
-- [ ] Service (ClusterIP; LoadBalancer as a commented option)
-- [ ] Probes: TCP on the SSH port, HTTP `/health` on VictoriaMetrics
+- [x] Secrets for the host key and the authorized keys
+- [x] ServiceAccount, Role/RoleBinding (and a ClusterRole variant) with `list` and `watch` on `pods` only
+- [x] Service (ClusterIP; LoadBalancer as a commented option)
+- [x] Probes: TCP on the SSH port, HTTP `/health` on VictoriaMetrics
 - [ ] Resource requests and limits from a short test at the session cap
 
 ### 4c. Verify on kind
 
-Not done: no container runtime (docker or podman) and no `kubectl` here, so kind cannot create a cluster. Run `make kind-up ssh-example-keys ssh-image`, then the steps below.
+Verified on a kind cluster (`make kind-up ssh-image`, keys from `make ssh-example-keys`, `kubectl apply -k examples/ssh`, `kubectl -n omtui port-forward svc/omtui-dash 2222:2222`). Pod restart check: the host key fingerprint was unchanged and a client with `StrictHostKeyChecking=yes` connected; panels were empty again after the restart (history lost with the `emptyDir`).
 
-- [ ] Apply the example on the `docs/kubernetes-local.md` kind setup with the demo workloads
-- [ ] Pods are discovered and scraped; panels fill
-- [ ] Two SSH sessions work independently
-- [ ] Pod restart keeps the host key and loses history (documented)
-- [ ] Exit: `kubectl apply -k examples/ssh` then `ssh -p 2222 <svc>` shows live data on a cluster with no Prometheus
+- [x] Apply the example on the `docs/kubernetes-local.md` kind setup with the demo workloads
+- [x] Pods are discovered and scraped; panels fill
+- [x] Two SSH sessions work independently
+- [x] Pod restart keeps the host key and loses history (documented)
+- [x] Exit: `kubectl apply -k examples/ssh` then `ssh -p 2222 <svc>` shows live data on a cluster with no Prometheus
 
 ## Phase 5: dashboard catalog
 
 ### 5a. Catalog
 
-- [ ] `internal/dashboard/catalog.go`: `LoadCatalog(dir)`, `Names()`, `Get(name)`; reads `*.yaml` and `*.yml` (not recursive) with `Load`, sorted by name
-- [ ] Names match `^[a-z0-9][a-z0-9._-]*$` after stripping the extension; others skipped with a warning
-- [ ] Duplicate name (`a.yaml` and `a.yml`) is an error; empty directory is an error
-- [ ] Lookup is a map access only; no user input is joined into a path
-- [ ] `Reload()`: a file that fails to parse is skipped and reported, the rest stay usable; startup treats any failure as fatal
-- [ ] Tests: listing and order, invalid file (fatal at startup, skipped on reload), name rules, duplicate name, `../x` and absolute paths not found, empty directory
+- [x] `internal/dashboard/catalog.go`: `LoadCatalog(dir)`, `Names()`, `Get(name)`; reads `*.yaml` and `*.yml` (not recursive) with `Load`, sorted by name
+- [x] Names match `^[a-z0-9][a-z0-9._-]*$` after stripping the extension; others skipped with a warning
+- [x] Duplicate name (`a.yaml` and `a.yml`) is an error; empty directory is an error
+- [x] Lookup is a map access only; no user input is joined into a path
+- [x] `Reload()`: a file that fails to parse is skipped and reported, the rest stay usable; startup treats any failure as fatal
+- [x] Tests: listing and order, invalid file (fatal at startup, skipped on reload), name rules, duplicate name, `../x` and absolute paths not found, empty directory
 
 ### 5b. Wiring
 
-- [ ] `dashapp.go`: the path argument may be a file or a directory; a file is a catalog of one and behaves as before
-- [ ] Directory mode requires `--prom` and rejects `--var`
-- [ ] Warn at startup when a catalog dashboard sets `datasource.url`; ignore it
-- [ ] `--check` over a directory checks every dashboard
-- [ ] `--print-scrape-config` with a directory: exactly one dashboard may carry `scrape:`; more than one is an error, none uses the defaults
-- [ ] SSH handler reloads the catalog per connection and builds the session from the chosen dashboard with its own default `Values`
-- [ ] Tests: directory with `--var` rejected, without `--prom` rejected, two `scrape:` sections rejected
+- [x] `dashapp.go`: the path argument may be a file or a directory; a file is a catalog of one and behaves as before
+- [x] Directory mode requires `--prom` and rejects `--var`
+- [x] Warn at startup when a catalog dashboard sets `datasource.url`; ignore it
+- [x] `--check` over a directory checks every dashboard
+- [x] `--print-scrape-config` with a directory: exactly one dashboard may carry `scrape:`; more than one is an error, none uses the defaults
+- [x] SSH handler reloads the catalog per connection and builds the session from the chosen dashboard with its own default `Values`
+- [x] Tests: directory with `--var` rejected, without `--prom` rejected, two `scrape:` sections rejected
 
 ### 5c. Selection
 
-- [ ] Name from `sess.Command()`: exactly one argument, otherwise an error message
-- [ ] No name and one dashboard: open directly
-- [ ] No name and several dashboards: picker model (title and name, arrows, Enter, `q`) using the session renderer
-- [ ] Unknown name: print the available names to the session and exit non-zero
-- [ ] SSH integration tests: `NAME` opens that dashboard; unknown name lists names; picker then Enter opens one; a file added to the directory appears on the next connection
+- [x] Name from `sess.Command()`: exactly one argument, otherwise an error message
+- [x] No name and one dashboard: open directly
+- [x] No name and several dashboards: picker model (title and name, arrows, Enter, `q`) using the session renderer
+- [x] Unknown name: print the available names to the session and exit non-zero
+- [x] SSH integration tests: `NAME` opens that dashboard; unknown name lists names; picker then Enter opens one; a file added to the directory appears on the next connection
 
 ### 5d. Example
 
-- [ ] `examples/ssh/`: mount a directory ConfigMap with two dashboards instead of a single file
-- [ ] Exit: `ssh -t host team-a` and `ssh -t host team-b` open their own dashboards; plain `ssh host` shows the picker; editing the ConfigMap changes what new connections see
+- [x] `examples/ssh/`: mount a directory ConfigMap with two dashboards instead of a single file
+- [x] Exit: `ssh -t host team-a` and `ssh -t host team-b` open their own dashboards; plain `ssh host` shows the picker; editing the ConfigMap changes what new connections see
+
+Verified: `go build`, `go vet` and `go test ./...` are green. On the kind cluster `omtui` (image rebuilt, `kubectl apply -k examples/ssh`, deployment restarted, port-forward and a real OpenSSH client in tmux): `ssh -t host team-a` and `team-b` open their own dashboards, plain `ssh host` shows the picker (Enter and `j`+Enter open the first and second), an unknown name prints `Unknown dashboard "nope". Available: team-a, team-b` and exits 1, and replacing the ConfigMap (edited team-b, added team-c) showed up in the picker of a new connection about 30 s later, with no restart. Not verified: panels showed "no data (not scraped?)" on the cluster, so live data in the catalog dashboards was not checked (scraping is Phase 4c, unchanged here). Without `-t` the session is refused by the PTY check, so the unknown-name message needs `-t` too. The example ConfigMap has no name suffix hash so edits apply without a pod restart.
 
 ## Phase 6: documentation
 
-- [ ] `README.md`: "Serve over SSH" section with flags, auth model and security notes
-- [ ] `docs/kubernetes-local.md`: sidecar deployment as another way to run it; `--print-scrape-config`
-- [ ] README: the catalog directory, `ssh -t host NAME`, the picker, and the catalog rules (needs `--prom`, no `--var`, one `scrape:` section)
-- [ ] State the limits: no snapshot key, no `R` or `L` with the sidecar, history lost on restart without a PVC, no headless HTTP over SSH, colour depth depends on the client
-- [ ] Note that `SendEnv COLORTERM` is needed for truecolor
+- [x] `README.md`: "Serve over SSH" section with flags, auth model and security notes
+- [x] `docs/kubernetes-local.md`: sidecar deployment as another way to run it; `--print-scrape-config`
+- [x] README: the catalog directory, `ssh -t host NAME`, the picker, and the catalog rules (needs `--prom`, no `--var`, one `scrape:` section)
+- [x] State the limits: no snapshot key, no `R` or `L` with the sidecar, history lost on restart without a PVC, no headless HTTP over SSH, colour depth depends on the client
+- [x] Note that `SendEnv COLORTERM` is needed for truecolor
 
 ## Phase 7 (later): single image with managed mode over SSH
 
 ### 7a. In-cluster managed mode
 
-- [ ] `--managed --in-cluster` (or detect `KUBERNETES_SERVICE_HOST`)
-- [ ] Skip `kubectl` startup and preflight; start only VictoriaMetrics with the in-cluster scrape config
-- [ ] `Health`, `Logs`, `Restart`, `Events` work for the single child; `Restart` no longer restarts a proxy
-- [ ] Reject `--kubectl-bin` and `--kube-context` with `--in-cluster`
-- [ ] Existing proxy managed mode unchanged
+- [x] `--managed --in-cluster` (explicit flag only; `KUBERNETES_SERVICE_HOST` is not auto-detected, so plain `--managed` inside a pod keeps its old meaning)
+- [x] Skip `kubectl` startup and preflight; start only VictoriaMetrics with the in-cluster scrape config
+- [x] `Health`, `Logs`, `Restart`, `Events` work for the single child; `Restart` no longer restarts a proxy
+- [x] Reject `--kubectl-bin` and `--kube-context` with `--in-cluster`
+- [x] Existing proxy managed mode unchanged
 
 ### 7b. Share the backend between sessions
 
-- [ ] Event broadcaster: fan out `Backend.Events()` to every subscriber with non-blocking sends and a small per-subscriber buffer
-- [ ] `dashtui`: subscribe per model, unsubscribe on session end
-- [ ] Serialise `Restart`; a second call while one runs returns the same result
-- [ ] Relax the Phase 2 validation: allow `--ssh-listen` with `--managed --in-cluster`; keep plain `--managed` rejected
-- [ ] Tests: two subscribers both receive; an unsubscribed one does not block the broadcaster; concurrent `Restart`; flag validation
+- [x] Event broadcaster: fan out `Backend.Events()` to every subscriber with non-blocking sends and a small per-subscriber buffer
+- [x] `dashtui`: subscribe per model, unsubscribe on session end
+- [x] Serialise `Restart`; a second call while one runs returns the same result
+- [x] Relax the Phase 2 validation: allow `--ssh-listen` with `--managed --in-cluster`; keep plain `--managed` rejected
+- [x] Tests: two subscribers both receive; an unsubscribed one does not block the broadcaster; concurrent `Restart`; flag validation
 
 ### 7c. Image
 
-- [ ] Second Dockerfile target or build arg with a pinned `victoria-metrics` next to `omtui-dash`, no `kubectl`
-- [ ] Non-root with a writable `--data-dir`
+- [x] Second Dockerfile target or build arg with a pinned `victoria-metrics` next to `omtui-dash`, no `kubectl`
+- [x] Non-root with a writable `--data-dir`
 
 ### 7d. Manifests and verification
 
-- [ ] `examples/ssh-single/`: one container, `--managed --in-cluster`, PVC variant
-- [ ] Run on kind; kill the VictoriaMetrics child; the banner shows in two sessions at once and `R` recovers both
-- [ ] SSH integration test with a fake managed backend
-- [ ] Exit: one image, one container, `ssh` shows data, a deliberate child failure is visible and recoverable from any session
+- [x] `examples/ssh-single/`: one container, `--managed --in-cluster`, PVC variant
+- [x] Run on kind; kill the VictoriaMetrics child; the banner shows in two sessions at once and `R` recovers both
+- [x] SSH integration test with a fake managed backend
+- [x] Exit: one image, one container, `ssh` shows data, a deliberate child failure is visible and recoverable from any session
+
+Verification notes:
+
+- Unit and integration tests (`go test ./... -race`) cover the broadcaster,
+  concurrent `Restart` (one start, shared result and error), in-cluster start
+  with no kubectl, flag validation, and an SSH test with a fake managed backend
+  (two sessions see the failure, `R` restarts once, both stay subscribed).
+- On kind (namespace `omtui-single`, image target `single`): data showed over
+  ssh; after `kill -9` of the victoria-metrics child the banner appeared in two
+  tmux sessions at once, and `R` in one recovered both (the other on its next
+  tick, up to the refresh interval). The PVC variant came up with the claim
+  bound and VictoriaMetrics data on it. Not verified: history surviving a pod
+  restart on the PVC, and `L` in a live session (only in unit tests).
+- Deviations: no `KUBERNETES_SERVICE_HOST` detection; the PVC variant is the
+  sibling `examples/ssh-single-pvc/` (a kustomize overlay cannot live inside its
+  own base); the dashboards in `examples/ssh-single/` are copies.

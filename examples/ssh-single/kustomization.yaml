@@ -1,0 +1,38 @@
+# omtui-dash served over SSH from one container that also runs
+# victoria-metrics (--managed --in-cluster). One image, no sidecar. The health
+# banner, R (restart) and L (logs) work in every session.
+#
+#   make ssh-example-keys              # once: keys, also for examples/ssh
+#   make ssh-single-image              # build and load into kind
+#   kubectl apply -k examples/ssh-single
+#   kubectl -n omtui-single port-forward svc/omtui-dash 2223:2222
+#   ssh -p 2223 localhost              # picker over the dashboards
+#
+# For history that survives a restart of the pod: kubectl apply -k examples/ssh-single-pvc
+#
+# The dashboards are copies of examples/ssh/dashboards (kustomize cannot read
+# outside this directory); exactly one of them has a scrape section. The Role
+# covers the demo namespace, as in examples/ssh.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - deployment.yaml
+  - service.yaml
+configMapGenerator:
+  # No name suffix hash: editing the ConfigMap changes what new connections see
+  # (after the kubelet syncs the mount) without restarting the pod. The scrape
+  # config is read at start, so changing a scrape section needs a restart.
+  - name: omtui-dashboards
+    namespace: omtui-single
+    files: [dashboards/team-a.yaml, dashboards/team-b.yaml]
+    options: {disableNameSuffixHash: true}
+secretGenerator:
+  # Created by `make ssh-example-keys`; never commit them.
+  - name: omtui-host-key
+    namespace: omtui-single
+    files: [host_key=secrets/host_key]
+  - name: omtui-authorized-keys
+    namespace: omtui-single
+    files: [authorized_keys=secrets/authorized_keys]

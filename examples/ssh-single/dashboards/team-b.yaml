@@ -1,0 +1,30 @@
+# A second dashboard in the same directory: `ssh -t host team-b`. It has no
+# scrape section, so it reads whatever team-a's scrape config collects.
+title: Team B, request health
+refresh: 10s
+windows: [now, 5m, 15m, 1h]
+spark: 1h
+
+variables:
+  namespace:
+    default: demo
+    pattern: '^[a-z0-9-]+$'
+
+panels:
+  - title: Requests per second
+    query: sum by (pod) (rate(http_requests_total{namespace="${namespace}"}[2m]))
+    label: "{{pod}}"
+    thresholds:
+      - { gt: 5, color: yellow }
+      - { color: green }
+
+  - title: Request error ratio
+    query: |
+      sum by (pod) (rate(http_requests_total{namespace="${namespace}", status="500"}[2m]))
+      / sum by (pod) (rate(http_requests_total{namespace="${namespace}"}[2m]))
+    unit: percent
+    label: "{{pod}}"
+    thresholds:
+      - { gt: 0.5, color: red }
+      - { gt: 0.2, color: yellow }
+      - { color: green }

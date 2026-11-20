@@ -54,7 +54,7 @@ func (f *stringsFlag) Set(s string) error {
 // managedOnlyFlags are meaningless without --managed.
 var managedOnlyFlags = []string{
 	"kube-context", "namespace", "kubectl-bin", "vm-bin",
-	"data-dir", "retention", "scrape-config", "log-file",
+	"data-dir", "retention", "scrape-config", "log-file", "in-cluster",
 }
 
 type config struct {
@@ -98,6 +98,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&cfg.managed, "managed", false, "start kubectl proxy and a local VictoriaMetrics that scrapes pods (needs kubectl)")
 	fs.StringVar(&cfg.mopts.KubeContext, "kube-context", "", "kubectl context for --managed (default: current context)")
 	fs.Var((*stringsFlag)(&cfg.mopts.Namespaces), "namespace", "scrape only this `namespace` with --managed, repeatable (overrides scrape.namespaces)")
+	fs.BoolVar(&cfg.mopts.InCluster, "in-cluster", false, "with --managed, run inside a pod: start only victoria-metrics and scrape pods directly with the pod's ServiceAccount (no kubectl)")
 	fs.StringVar(&cfg.mopts.KubectlBin, "kubectl-bin", "", "kubectl binary for --managed (default: kubectl on PATH)")
 	fs.StringVar(&cfg.mopts.VMBin, "vm-bin", "", "victoria-metrics binary for --managed (default: victoria-metrics on PATH)")
 	fs.StringVar(&cfg.mopts.DataDir, "data-dir", "", "keep --managed data in this `dir` so history survives restarts (default: temp dir removed on exit)")
@@ -140,6 +141,18 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
+	if cfg.mopts.InCluster {
+		var bad []string
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "kube-context" || f.Name == "kubectl-bin" {
+				bad = append(bad, "--"+f.Name)
+			}
+		})
+		if len(bad) > 0 {
+			_, _ = fmt.Fprintf(stderr, "omtui-dash: --in-cluster cannot be combined with %s: there is no kubectl\n", strings.Join(bad, ", "))
+			return 2
+		}
+	}
 	if code := validateSSH(fs, &cfg, stderr); code != 0 {
 		return code
 	}
@@ -148,6 +161,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	path := fs.Arg(0)
+	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		return runCatalog(&cfg, path, stdout, stderr)
+	}
 
 	d, err := dashboard.Load(path)
 	if err != nil {
@@ -182,7 +198,18 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if cfg.ssh.Listen != "" {
-		return serveSSH(ctx, &cfg, d, vals, be, stderr)
+		return serveSSH(ctx, &cfg, func(ctx context.Context, sess ssh.Session) (tea.Model, []tea.ProgramOption) {
+			// The renderer takes its colour profile from the client's TERM, not
+			// the server's stdout. Wish sets the program's input and output itself.
+			opts := dashtui.Options{
+				Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode, URL: be.url, NoSnapshot: true,
+				Renderer: bubbletea.MakeRenderer(sess),
+			}
+			if be.managed != nil {
+				opts.Backend = be.managed // shared: every session sees health and can restart
+			}
+			return dashtui.NewSession(ctx, opts), []tea.ProgramOption{tea.WithAltScreen()}
+		}, stderr)
 	}
 	opts := dashtui.Options{Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode, URL: be.url, HTTPPort: cfg.httpPort}
 	if be.managed != nil {
@@ -217,15 +244,22 @@ func printScrapeConfig(fs *flag.FlagSet, cfg *config, stdout, stderr io.Writer) 
 	var scrape *dashboard.Scrape
 	if fs.NArg() == 1 {
 		path := fs.Arg(0)
-		d, err := dashboard.Load(path)
-		if err != nil {
-			_, _ = fmt.Fprintln(stderr, err)
-			return 1
+		if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+			var code int
+			if scrape, code = catalogScrape(path, stderr); code != 0 {
+				return code
+			}
+		} else {
+			d, err := dashboard.Load(path)
+			if err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+			for _, w := range d.Warnings {
+				_, _ = fmt.Fprintf(stderr, "%s:%d: warning: %s\n", path, w.Line, w.Msg)
+			}
+			scrape = d.Scrape
 		}
-		for _, w := range d.Warnings {
-			_, _ = fmt.Fprintf(stderr, "%s:%d: warning: %s\n", path, w.Line, w.Msg)
-		}
-		scrape = d.Scrape
 	}
 	out, err := managed.GenerateScrapeConfig(managed.ScrapeParams{Scrape: scrape, Namespaces: cfg.mopts.Namespaces, InCluster: true})
 	if err != nil {
@@ -234,6 +268,30 @@ func printScrapeConfig(fs *flag.FlagSet, cfg *config, stdout, stderr io.Writer) 
 	}
 	_, _ = stdout.Write(out)
 	return 0
+}
+
+// catalogScrape returns the scrape section of the one dashboard in dir that has
+// one, or nil when none does. Several is an error, since the scrape config is
+// shared and there is no telling which dashboard is meant.
+func catalogScrape(dir string, stderr io.Writer) (*dashboard.Scrape, int) {
+	cat, err := dashboard.LoadCatalog(dir)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return nil, 1
+	}
+	var with []string
+	var scrape *dashboard.Scrape
+	for _, name := range cat.Names() {
+		if d, _ := cat.Get(name); d.Scrape != nil {
+			with = append(with, name)
+			scrape = d.Scrape
+		}
+	}
+	if len(with) > 1 {
+		_, _ = fmt.Fprintf(stderr, "omtui-dash: only one dashboard in %s may have a scrape section, found %s\n", dir, strings.Join(with, ", "))
+		return nil, 1
+	}
+	return scrape, 0
 }
 
 // validateSSH checks the --ssh-* flags and returns the exit code to stop with,
@@ -253,8 +311,10 @@ func validateSSH(fs *flag.FlagSet, cfg *config, stderr io.Writer) int {
 		return 0
 	}
 	var bad []string
-	if cfg.managed {
-		bad = append(bad, "--managed")
+	// Plain --managed would use the server's kubeconfig for everyone who
+	// connects; in-cluster uses the pod's own ServiceAccount.
+	if cfg.managed && !cfg.mopts.InCluster {
+		bad = append(bad, "--managed (without --in-cluster)")
 	}
 	if cfg.check {
 		bad = append(bad, "--check")
@@ -277,23 +337,93 @@ func validateSSH(fs *flag.FlagSet, cfg *config, stderr io.Writer) int {
 	return 0
 }
 
+// runCatalog is Run for a directory of dashboards: it checks them all, or
+// serves them over SSH, where each connection picks one. The directory needs
+// --prom or --managed and takes no --var, because the dashboards have
+// different variables.
+func runCatalog(cfg *config, dir string, stdout, stderr io.Writer) int {
+	switch {
+	case cfg.promURL == "" && !cfg.managed:
+		_, _ = fmt.Fprintln(stderr, "omtui-dash: a dashboard directory needs --prom or --managed")
+		return 2
+	case len(cfg.vars) > 0:
+		_, _ = fmt.Fprintln(stderr, "omtui-dash: --var does not apply to a dashboard directory")
+		return 2
+	case !cfg.check && cfg.ssh.Listen == "":
+		_, _ = fmt.Fprintln(stderr, "omtui-dash: a dashboard directory needs --ssh-listen or --check")
+		return 2
+	}
+	cat, err := dashboard.LoadCatalog(dir)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	for _, w := range cat.Skipped() {
+		_, _ = fmt.Fprintf(stderr, "omtui-dash: warning: %s\n", w)
+	}
+	for _, name := range cat.Names() {
+		d, _ := cat.Get(name)
+		for _, w := range d.Warnings {
+			_, _ = fmt.Fprintf(stderr, "%s:%d: warning: %s\n", name, w.Line, w.Msg)
+		}
+		if d.Datasource.URL != "" {
+			_, _ = fmt.Fprintf(stderr, "omtui-dash: warning: %s: datasource.url is ignored, using --prom\n", name)
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// An external backend does not depend on the dashboards; a managed one
+	// scrapes what the one dashboard with a scrape section asks for.
+	var scrape *dashboard.Scrape
+	if cfg.managed {
+		var code int
+		if scrape, code = catalogScrape(dir, stderr); code != 0 {
+			return code
+		}
+	}
+	be, err := newBackend(ctx, cfg, &dashboard.Dashboard{Scrape: scrape}, stderr)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "omtui-dash: %v\n", err)
+		var se *managed.StartError
+		if errors.As(err, &se) {
+			return 1
+		}
+		return 2
+	}
+	defer be.close()
+	if cfg.check {
+		failed := 0
+		for _, name := range cat.Names() {
+			d, _ := cat.Get(name)
+			vals, err := d.Values(nil)
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "omtui-dash: %s: %v\n", name, err)
+				return 2
+			}
+			_, _ = fmt.Fprintf(stdout, "== %s\n", name)
+			failed += Check(ctx, d, vals, be.q, time.Now(), stdout)
+		}
+		if failed > 0 {
+			return 1
+		}
+		return 0
+	}
+	base := dashtui.Options{Querier: be.q, Mode: be.mode, URL: be.url, NoSnapshot: true}
+	if be.managed != nil {
+		base.Backend = be.managed
+	}
+	return serveSSH(ctx, cfg, sshserve.CatalogModel(cat, base), stderr)
+}
+
 // serveSSH serves one dashboard session per SSH connection, all sharing the
 // backend's Querier, until ctx is cancelled.
-func serveSSH(ctx context.Context, cfg *config, d *dashboard.Dashboard, vals map[string]string, be *backend, stderr io.Writer) int {
+func serveSSH(ctx context.Context, cfg *config, newModel sshserve.NewModel, stderr io.Writer) int {
 	if cfg.ssh.AllowAnyKey {
 		_, _ = fmt.Fprintln(stderr, "omtui-dash: warning: --ssh-allow-any-key lets anyone who can reach the port view the dashboard")
 	}
 	cfg.ssh.OnListen = func(addr net.Addr, fingerprint string) {
 		_, _ = fmt.Fprintf(stderr, "omtui-dash: serving SSH on %s, host key %s\n", addr, fingerprint)
-	}
-	newModel := func(ctx context.Context, sess ssh.Session) (tea.Model, []tea.ProgramOption) {
-		// The renderer takes its colour profile from the client's TERM, not the
-		// server's stdout. Wish sets the program's input and output itself.
-		m := dashtui.NewSession(ctx, dashtui.Options{
-			Dashboard: d, Values: vals, Querier: be.q, Mode: be.mode, URL: be.url, NoSnapshot: true,
-			Renderer: bubbletea.MakeRenderer(sess),
-		})
-		return m, []tea.ProgramOption{tea.WithAltScreen()}
 	}
 	if err := sshserve.Serve(ctx, cfg.ssh, newModel); err != nil {
 		_, _ = fmt.Fprintf(stderr, "omtui-dash: %v\n", err)
@@ -340,7 +470,10 @@ func newBackend(ctx context.Context, cfg *config, d *dashboard.Dashboard, stderr
 		_, _ = fmt.Fprintf(stderr, "omtui-dash: warning: %s\n", w)
 	}
 	ctxName := cfg.mopts.KubeContext
-	if ctxName == "" {
+	switch {
+	case cfg.mopts.InCluster:
+		ctxName = "in-cluster"
+	case ctxName == "":
 		ctxName = "current context"
 	}
 	return &backend{q: b.Querier(), mode: "managed " + ctxName, managed: b, close: func() { _ = b.Close() }}, nil

@@ -820,3 +820,47 @@ func TestNewSessionBuildsModelWithContext(t *testing.T) {
 		t.Error("session context not bound to ctx")
 	}
 }
+
+// Two sessions share one backend: a child exit reaches both, and a session
+// that ends stops receiving.
+func TestSessionsShareBackendEvents(t *testing.T) {
+	b := newFakeBackend()
+	var models []*Model
+	var cancels []context.CancelFunc
+	for range 2 {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancels = append(cancels, cancel)
+		models = append(models, newTestModel(t, mustDash(t, testDash), &fakeQuerier{handle: demoHandler}, func(o *Options) {
+			o.Backend, o.Ctx = b, ctx
+		}))
+	}
+	if n := b.subscribers(); n != 2 {
+		t.Fatalf("%d subscriptions, want 2", n)
+	}
+	cmds := make([]tea.Cmd, len(models))
+	for i, m := range models {
+		cmds[i] = m.waitEvent()
+	}
+	b.events.Send(managed.Event{Child: "victoria-metrics", Err: errBoom})
+	for i, cmd := range cmds {
+		done := make(chan tea.Msg, 1)
+		go func() { done <- cmd() }()
+		select {
+		case msg := <-done:
+			if ev, ok := msg.(eventMsg); !ok || ev.ev.Child != "victoria-metrics" {
+				t.Errorf("session %d got %#v", i, msg)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("session %d got no event", i)
+		}
+	}
+
+	cancels[0]()
+	deadline := time.Now().Add(2 * time.Second)
+	for b.subscribers() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d subscriptions after one session ended, want 1", b.subscribers())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

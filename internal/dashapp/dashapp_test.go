@@ -226,6 +226,7 @@ func TestSSHFlagValidation(t *testing.T) {
 		{[]string{"--ssh-listen", ":0", "--ssh-authorized-keys", keys, "--http-port", "9999", "--prom", "http://x"}, "--http-port"},
 		{[]string{"--ssh-listen", ":0", "--prom", "http://x"}, "--ssh-authorized-keys"},
 		{[]string{"--ssh-listen", ":0", "--ssh-allow-any-key", "--ssh-max-sessions", "0", "--prom", "http://x"}, "--ssh-max-sessions"},
+		{[]string{"--ssh-listen", ":0", "--ssh-authorized-keys", keys, "--managed", "--check", "--in-cluster"}, "--check"},
 		{[]string{"--ssh-allow-any-key", "--prom", "http://x"}, "only apply with --ssh-listen"},
 		{[]string{"--ssh-max-sessions", "5", "--prom", "http://x"}, "--ssh-max-sessions"},
 	} {
@@ -267,5 +268,123 @@ func TestPrintScrapeConfigExclusive(t *testing.T) {
 		if code != 2 || out != "" || !strings.Contains(errOut, extra[0]) {
 			t.Errorf("%v: code %d, stdout %q, stderr %q", extra, code, out, errOut)
 		}
+	}
+}
+
+func writeCatalog(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestCatalogFlagValidation(t *testing.T) {
+	dir := writeCatalog(t, map[string]string{"a.yaml": dash, "b.yaml": dash})
+	keys := filepath.Join(t.TempDir(), "authorized_keys")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--ssh-listen", ":0", "--ssh-authorized-keys", keys, "--prom", "http://x", "--var", "ns=a"}, "--var"},
+		{[]string{"--ssh-listen", ":0", "--ssh-authorized-keys", keys}, "needs --prom or --managed"},
+		{[]string{"--check"}, "needs --prom or --managed"},
+		{[]string{"--prom", "http://x"}, "--ssh-listen or --check"},
+	} {
+		code, _, errOut := run(append(tc.args, dir)...)
+		if code != 2 || !strings.Contains(errOut, tc.want) {
+			t.Errorf("%v: code %d, stderr %q", tc.args, code, errOut)
+		}
+	}
+}
+
+func TestCatalogCheckEveryDashboard(t *testing.T) {
+	srv := fakeBackend(t, nil)
+	dir := writeCatalog(t, map[string]string{
+		"a.yaml": "title: A\ndatasource: {url: http://ignored}\npanels:\n  - title: PA\n    query: up\n",
+		"b.yaml": "title: B\npanels:\n  - title: PB\n    query: broken\n",
+	})
+	code, out, errOut := run("--check", "--prom", srv.URL, dir)
+	if code != 1 {
+		t.Fatalf("code %d, stderr %q", code, errOut)
+	}
+	for _, want := range []string{"== a", "ok    PA: 2 rows", "== b", "FAIL  PB: bad_data: boom"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(errOut, "a: datasource.url is ignored") {
+		t.Errorf("no datasource.url warning: %q", errOut)
+	}
+}
+
+func TestCatalogInvalidFileIsFatal(t *testing.T) {
+	dir := writeCatalog(t, map[string]string{"a.yaml": dash, "b.yaml": "bogus: 1\n"})
+	code, _, errOut := run("--check", "--prom", "http://x", dir)
+	if code != 1 || !strings.Contains(errOut, "b.yaml") {
+		t.Errorf("code %d, stderr %q", code, errOut)
+	}
+}
+
+func TestCatalogPrintScrapeConfig(t *testing.T) {
+	scrape := func(ns string) string {
+		return "title: T\nscrape:\n  namespaces: [" + ns + "]\npanels:\n  - title: P\n    query: up\n"
+	}
+	plain := "title: T\npanels:\n  - title: P\n    query: up\n"
+
+	dir := writeCatalog(t, map[string]string{"a.yaml": scrape("one"), "b.yaml": scrape("two")})
+	code, out, errOut := run("--print-scrape-config", dir)
+	if code != 1 || out != "" || !strings.Contains(errOut, "only one dashboard") || !strings.Contains(errOut, "a, b") {
+		t.Errorf("two scrape sections: code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+
+	dir = writeCatalog(t, map[string]string{"a.yaml": plain, "b.yaml": scrape("two")})
+	if code, out, errOut = run("--print-scrape-config", dir); code != 0 || !strings.Contains(out, "names: [two]") {
+		t.Errorf("one scrape section: code %d, stderr %q\n%s", code, errOut, out)
+	}
+
+	dir = writeCatalog(t, map[string]string{"a.yaml": plain, "b.yaml": plain})
+	if code, out, errOut = run("--print-scrape-config", dir); code != 0 || !strings.Contains(out, "role: pod") {
+		t.Errorf("no scrape section: code %d, stderr %q\n%s", code, errOut, out)
+	}
+}
+
+func TestInClusterFlagValidation(t *testing.T) {
+	path := writeDash(t, dash)
+	keys := filepath.Join(t.TempDir(), "authorized_keys")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--in-cluster", "--prom", "http://x"}, "only apply with --managed"},
+		{[]string{"--managed", "--in-cluster", "--kube-context", "c"}, "--in-cluster cannot be combined with --kube-context"},
+		{[]string{"--managed", "--in-cluster", "--kubectl-bin", "k"}, "--kubectl-bin"},
+		{[]string{"--managed", "--ssh-listen", ":0", "--ssh-authorized-keys", keys}, "--managed (without --in-cluster)"},
+	} {
+		code, _, errOut := run(append(tc.args, path)...)
+		if code != 2 || !strings.Contains(errOut, tc.want) {
+			t.Errorf("%v: code %d, stderr %q", tc.args, code, errOut)
+		}
+	}
+}
+
+// --managed --in-cluster starts only victoria-metrics, so --check works with
+// no kubectl at all, over a single dashboard and over a directory.
+func TestInClusterCheckEndToEnd(t *testing.T) {
+	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
+	t.Setenv("TMPDIR", t.TempDir())
+	vm := fakeTool(t, "victoria-metrics")
+	path := writeDash(t, "title: T\npanels:\n  - {title: Good, query: up}\n")
+	code, out, errOut := run("--managed", "--in-cluster", "--check", "--vm-bin", vm, path)
+	if code != 0 || !strings.Contains(out, "ok    Good: 1 rows") {
+		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out, errOut)
+	}
+	dir := writeCatalog(t, map[string]string{"a.yaml": "title: A\npanels:\n  - {title: PA, query: up}\n"})
+	code, out, errOut = run("--managed", "--in-cluster", "--check", "--vm-bin", vm, dir)
+	if code != 0 || !strings.Contains(out, "ok    PA: 1 rows") {
+		t.Fatalf("directory: code %d\nstdout %s\nstderr %s", code, out, errOut)
 	}
 }
